@@ -1,0 +1,33 @@
+query CountryFull($c: String!) {
+  country(code: $c) {
+    code
+    name
+    menus {
+      menuId
+      name
+      daypart
+      categories {
+        categoryId
+        name
+        products {
+          menuItemId
+          name
+          sellableItems {
+            sellableItemId
+            sku
+            size
+            priceCents
+            currency
+            nutrition {
+              calories
+              fatG
+              sugarG
+              proteinG
+              caffeineMg
+            }
+          }
+        }
+      }
+    }
+  }
+}

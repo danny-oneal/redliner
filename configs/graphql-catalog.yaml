@@ -1,0 +1,84 @@
+# GraphQL scenario for the gqlgen catalog server (chds-graph).
+# Reproduces the harness's original built-in behavior: 4 weighted root
+# queries against IDs/SKUs harvested from the live server.
+version: 1
+
+target:
+  url: http://localhost:8080/query
+  protocol: graphql
+  timeout: 10s
+
+load:
+  profile: poisson   # natural cadence; use `constant` for metronomic load
+  rate: 200
+  duration: 30s
+  warmup: 3s
+
+data:
+  pools:
+    country_codes: { type: list, values: [US, CA] }
+  harvest:
+    # One full-country pull seeds every pool the scenarios draw from, so
+    # every attack request resolves to real data.
+    - request:
+        query: |
+          query($c:String!){
+            country(code:$c){
+              menus{ categories{ products{
+                menuItemId
+                sellableItems{ sellableItemId sku }
+              } } }
+            }
+          }
+        variables: { c: US }
+      extract:
+        menu_item_ids:     data.country.menus[].categories[].products[].menuItemId
+        sellable_item_ids: data.country.menus[].categories[].products[].sellableItems[].sellableItemId
+        skus:              data.country.menus[].categories[].products[].sellableItems[].sku
+
+scenarios:
+  - name: SellableItemByID          # POS barcode scan — point lookup
+    weight: 35
+    request:
+      query: |
+        query SellableItemByID($id:Int!){
+          sellableItem(id:$id){ sellableItemId sku priceCents currency
+            nutrition{ calories caffeineMg } } }
+      variables: { id: "{{sellable_item_ids}}" }
+
+  - name: SellableItemBySKU         # search-by-SKU
+    weight: 30
+    request:
+      query: |
+        query SellableItemBySKU($sku:String!){
+          sellableItemBySku(sku:$sku){ sellableItemId sku size priceCents } }
+      variables: { sku: "{{skus}}" }
+
+  - name: MenuItemByID              # product page
+    weight: 15
+    request:
+      query: |
+        query MenuItemByID($id:Int!){
+          menuItem(id:$id){ menuItemId name
+            sellableItems{ sellableItemId sku priceCents } } }
+      variables: { id: "{{menu_item_ids}}" }
+
+  - name: CountryFull               # first paint / menu refresh — heavy
+    weight: 20
+    request:
+      # Deeply nested selections read better as .graphql files (highlighting,
+      # linting, reuse). Paths resolve relative to this config file.
+      query_file: queries/country-full.graphql
+      variables: { c: "{{country_codes}}" }
+
+checks:
+  graphql_errors: true   # 200-with-errors counts as failure
+
+slos:
+  success_rate: 0.995
+  p95: 250ms
+  p99: 800ms
+
+report:
+  dir: reports
+  junit: true

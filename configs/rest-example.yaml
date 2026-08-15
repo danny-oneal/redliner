@@ -1,0 +1,66 @@
+# REST scenario example: a typical products/orders JSON API.
+# Copy, point at your service, adjust paths and pools.
+version: 1
+
+target:
+  url: http://localhost:8081        # base URL; scenario paths append to it
+  protocol: rest
+  timeout: 5s
+  headers:
+    X-Client: capacity-bench
+  # auth:                           # uncomment for authenticated APIs
+  #   type: bearer                  # none | bearer | basic | header
+  #   token_env: BENCH_TOKEN        # read from environment, never from file
+
+load:
+  profile: steps                    # find the throughput knee
+  warmup: 3s
+  steps:
+    - { rate: 100, duration: 30s }
+    - { rate: 250, duration: 30s }
+    - { rate: 500, duration: 30s }
+
+data:
+  pools:
+    product_ids: { type: range, min: 1, max: 500 }
+    quantities:  { type: list, values: [1, 2, 3] }
+  harvest:
+    # Seed SKUs from the live API so lookups always resolve.
+    - request:
+        method: GET
+        path: /products?limit=100
+      extract:
+        skus: items[].sku
+
+scenarios:
+  - name: GetProduct
+    weight: 50
+    request:
+      method: GET
+      path: /products/{{product_ids}}
+
+  - name: SearchBySKU
+    weight: 30
+    request:
+      method: GET
+      path: /products?sku={{skus}}
+
+  - name: CreateOrder
+    weight: 20
+    request:
+      method: POST
+      path: /orders
+      body: '{"productId": {{product_ids}}, "quantity": {{quantities}}}'
+
+checks:
+  status: [200, 201]                # anything else is a failure
+
+slos:
+  success_rate: 0.999
+  p95: 150ms
+  p99: 400ms
+  throughput_min: 90
+
+report:
+  dir: reports
+  junit: true
