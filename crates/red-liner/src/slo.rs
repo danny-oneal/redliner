@@ -61,7 +61,7 @@ pub fn passed(results: &[SloResult]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::GoDuration;
+    use crate::config::ConfigDuration;
     use std::time::SystemTime;
     use volley::AttackResult;
 
@@ -84,7 +84,7 @@ mod tests {
         }
         m.close();
         let slos = SloConfig {
-            p95: GoDuration(Duration::from_millis(50)),
+            p95: ConfigDuration(Duration::from_millis(50)),
             ..Default::default()
         };
         let res = evaluate(&slos, &m);
@@ -92,7 +92,7 @@ mod tests {
         assert!(!res[0].passed);
         assert!(!passed(&res));
 
-        let ok = SloConfig { p95: GoDuration(Duration::from_secs(1)), ..Default::default() };
+        let ok = SloConfig { p95: ConfigDuration(Duration::from_secs(1)), ..Default::default() };
         assert!(passed(&evaluate(&ok, &m)));
     }
 }

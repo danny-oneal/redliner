@@ -68,10 +68,10 @@ pub fn build_phases(load: &LoadConfig) -> anyhow::Result<Vec<Phase>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{GoDuration, RampConfig, Step};
+    use crate::config::{ConfigDuration, RampConfig, Step};
 
     fn step(rate: f64, secs: u64) -> Step {
-        Step { rate, duration: GoDuration(Duration::from_secs(secs)) }
+        Step { rate, duration: ConfigDuration(Duration::from_secs(secs)) }
     }
 
     #[test]
@@ -92,7 +92,7 @@ mod tests {
         let poisson = LoadConfig {
             profile: "poisson".into(),
             rate: 5.0,
-            duration: GoDuration(Duration::from_secs(1)),
+            duration: ConfigDuration(Duration::from_secs(1)),
             ..Default::default()
         };
         assert_eq!(build_phases(&poisson).unwrap().len(), 1);
@@ -100,7 +100,7 @@ mod tests {
         let ramp = LoadConfig {
             profile: "ramp".into(),
             ramp: RampConfig { from: 1.0, to: 11.0 },
-            duration: GoDuration(Duration::from_secs(10)),
+            duration: ConfigDuration(Duration::from_secs(10)),
             ..Default::default()
         };
         let p = build_phases(&ramp).unwrap();

@@ -1,21 +1,23 @@
-//! Go-syntax duration newtype (parity with Go's `time.ParseDuration`).
+//! Duration newtype for config fields, parsed from strings like `250ms`,
+//! `2m`, `1h30m`. The accepted syntax matches Go's `time.ParseDuration`, so
+//! existing scenario files parse identically.
 
 use std::str::FromStr;
 use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// A duration written in Go syntax, e.g. `250ms`, `1h30m`, `1.5s`.
+/// A duration written in the config's string form, e.g. `250ms`, `1h30m`, `1.5s`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct GoDuration(pub Duration);
+pub struct ConfigDuration(pub Duration);
 
-impl GoDuration {
+impl ConfigDuration {
     pub fn as_std(&self) -> Duration {
         self.0
     }
 }
 
-impl FromStr for GoDuration {
+impl FromStr for ConfigDuration {
     type Err = String;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
@@ -27,7 +29,7 @@ impl FromStr for GoDuration {
             s = rest;
         }
         if s == "0" {
-            return Ok(GoDuration(Duration::ZERO));
+            return Ok(ConfigDuration(Duration::ZERO));
         }
         if s.is_empty() {
             return Err(invalid());
@@ -89,18 +91,18 @@ impl FromStr for GoDuration {
         }
         let secs = u64::try_from(total / 1_000_000_000).map_err(|_| invalid())?;
         let subsec = (total % 1_000_000_000) as u32;
-        Ok(GoDuration(Duration::new(secs, subsec)))
+        Ok(ConfigDuration(Duration::new(secs, subsec)))
     }
 }
 
-impl<'de> Deserialize<'de> for GoDuration {
+impl<'de> Deserialize<'de> for ConfigDuration {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
         s.parse().map_err(serde::de::Error::custom)
     }
 }
 
-impl Serialize for GoDuration {
+impl Serialize for ConfigDuration {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&format!("{}ns", self.0.as_nanos()))
     }
@@ -111,7 +113,7 @@ mod tests {
     use super::*;
 
     fn parse(s: &str) -> Result<Duration, String> {
-        s.parse::<GoDuration>().map(|d| d.as_std())
+        s.parse::<ConfigDuration>().map(|d| d.as_std())
     }
 
     #[test]
@@ -146,10 +148,10 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_via_yaml() {
-        let d: GoDuration = serde_yaml_ng::from_str("\"1h30m\"").unwrap();
+        let d: ConfigDuration = serde_yaml_ng::from_str("\"1h30m\"").unwrap();
         assert_eq!(d.as_std(), Duration::from_secs(5400));
         let out = serde_yaml_ng::to_string(&d).unwrap();
-        let back: GoDuration = serde_yaml_ng::from_str(&out).unwrap();
+        let back: ConfigDuration = serde_yaml_ng::from_str(&out).unwrap();
         assert_eq!(back, d);
     }
 }

@@ -233,7 +233,7 @@ fn pools_and_harvest_validated() {
 fn slo_enforced() {
     assert!(!SloConfig::default().enforced());
     let s = SloConfig {
-        p99: GoDuration(Duration::from_millis(5)),
+        p99: ConfigDuration(Duration::from_millis(5)),
         ..Default::default()
     };
     assert!(s.enforced());

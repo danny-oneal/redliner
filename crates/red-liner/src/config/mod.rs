@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-pub use duration::GoDuration;
+pub use duration::ConfigDuration;
 
 /// Request encoder selector. Defaults to GraphQL when omitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -42,7 +42,7 @@ pub struct Config {
 pub struct TargetConfig {
     pub url: String,
     pub protocol: Protocol,
-    pub timeout: GoDuration,
+    pub timeout: ConfigDuration,
     pub headers: BTreeMap<String, String>,
     pub auth: AuthConfig,
     /// Tri-state: `None` means "use default (true)".
@@ -72,8 +72,8 @@ pub struct LoadConfig {
     /// constant | poisson | ramp | steps
     pub profile: String,
     pub rate: f64,
-    pub duration: GoDuration,
-    pub warmup: GoDuration,
+    pub duration: ConfigDuration,
+    pub warmup: ConfigDuration,
     pub ramp: RampConfig,
     pub steps: Vec<Step>,
     pub workers: u64,
@@ -93,7 +93,7 @@ pub struct RampConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct Step {
     pub rate: f64,
-    pub duration: GoDuration,
+    pub duration: ConfigDuration,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -166,9 +166,9 @@ pub struct ChecksConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct SloConfig {
     pub success_rate: f64,
-    pub p50: GoDuration,
-    pub p95: GoDuration,
-    pub p99: GoDuration,
+    pub p50: ConfigDuration,
+    pub p95: ConfigDuration,
+    pub p99: ConfigDuration,
     pub throughput_min: f64,
 }
 
@@ -271,7 +271,7 @@ impl Config {
     fn apply_defaults(&mut self) {
         let t = &mut self.target;
         if t.timeout.as_std().is_zero() {
-            t.timeout = GoDuration(Duration::from_secs(10));
+            t.timeout = ConfigDuration(Duration::from_secs(10));
         }
         t.keep_alive.get_or_insert(true);
         if t.max_idle_conns == 0 {
@@ -293,7 +293,7 @@ impl Config {
             l.rate = 200.0;
         }
         if l.duration.as_std().is_zero() && l.steps.is_empty() {
-            l.duration = GoDuration(Duration::from_secs(30));
+            l.duration = ConfigDuration(Duration::from_secs(30));
         }
         if l.workers == 0 {
             l.workers = 10;

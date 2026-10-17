@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::config::{Config, GoDuration};
+use crate::config::{Config, ConfigDuration};
 
 /// Red Liner: SLO-driven HTTP load testing.
 #[derive(Parser, Debug, Clone)]
@@ -21,10 +21,10 @@ pub struct Args {
     pub rate: Option<f64>,
     /// Override load.duration (Go syntax, e.g. 30s).
     #[arg(long)]
-    pub duration: Option<GoDuration>,
+    pub duration: Option<ConfigDuration>,
     /// Override load.warmup (Go syntax, e.g. 5s).
     #[arg(long)]
-    pub warmup: Option<GoDuration>,
+    pub warmup: Option<ConfigDuration>,
     /// Override load.seed.
     #[arg(long)]
     pub seed: Option<i64>,
