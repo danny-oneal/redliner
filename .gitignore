@@ -2,3 +2,7 @@ capacity_bench
 reports/
 trace.out
 *.test
+
+# Rust
+/target
+**/target/

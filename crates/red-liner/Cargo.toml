@@ -1,0 +1,21 @@
+[package]
+name = "red-liner"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Red Liner load-testing tool"
+
+[[bin]]
+name = "red-liner"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.5.61", features = ["derive"] }
+http = "1.5.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+serde_yaml_ng = "0.10.0"
+thiserror = "2.0.20"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros"] }
+volley = { version = "0.1.0", path = "../volley" }
