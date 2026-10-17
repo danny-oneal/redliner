@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A duration written in Go syntax, e.g. `250ms`, `1h30m`, `1.5s`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GoDuration(pub Duration);
 
 impl GoDuration {

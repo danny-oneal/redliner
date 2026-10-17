@@ -1,4 +1,4 @@
-// Not yet wired into the CLI; remove the allow once main uses config.
+// Not yet wired into the CLI (a later task consumes the model).
 #[allow(dead_code)]
 mod config;
 

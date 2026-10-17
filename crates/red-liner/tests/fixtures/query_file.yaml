@@ -1,0 +1,7 @@
+target:
+  url: http://localhost:8080/graphql
+scenarios:
+  - name: from_file
+    weight: 1
+    request:
+      query_file: q.graphql
