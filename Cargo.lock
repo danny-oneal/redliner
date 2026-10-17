@@ -945,8 +945,12 @@ name = "red-liner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "http",
+ "percent-encoding",
+ "rand 0.9.5",
+ "rand_chacha",
  "serde",
  "serde_json",
  "serde_yaml_ng",
