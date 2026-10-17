@@ -42,6 +42,8 @@ pub struct Metrics {
     pub end: Option<SystemTime>,
     successes: u64,
     latency_total: Duration,
+    lat_min: Option<Duration>,
+    lat_max: Duration,
     hist: Histogram<u64>,
     error_set: BTreeSet<String>,
 }
@@ -69,6 +71,8 @@ impl Metrics {
             end: None,
             successes: 0,
             latency_total: Duration::ZERO,
+            lat_min: None,
+            lat_max: Duration::ZERO,
             // 1ns .. 1h, 3 significant digits.
             hist: Histogram::new_with_bounds(1, 3_600_000_000_000, 3)
                 .expect("valid histogram bounds"),
@@ -86,6 +90,12 @@ impl Metrics {
         let nanos = u64::try_from(r.latency.as_nanos()).unwrap_or(u64::MAX);
         self.hist.saturating_record(nanos.max(1));
         self.latency_total += r.latency;
+        if self.lat_min.is_none_or(|m| r.latency < m) {
+            self.lat_min = Some(r.latency);
+        }
+        if r.latency > self.lat_max {
+            self.lat_max = r.latency;
+        }
 
         if self.earliest.is_none_or(|e| r.timestamp < e) {
             self.earliest = Some(r.timestamp);
@@ -120,23 +130,26 @@ impl Metrics {
         let q = |p: f64| Duration::from_nanos(self.hist.value_at_quantile(p));
         self.latencies = Latencies {
             total: self.latency_total,
-            mean: Duration::from_nanos(self.hist.mean() as u64),
+            mean: self.latency_total / u32::try_from(self.requests).unwrap_or(u32::MAX),
             p50: q(0.50),
             p90: q(0.90),
             p95: q(0.95),
             p99: q(0.99),
-            max: Duration::from_nanos(self.hist.max()),
-            min: Duration::from_nanos(self.hist.min()),
+            max: self.lat_max,
+            min: self.lat_min.unwrap_or_default(),
         };
 
         // Vegeta semantics: rate over [earliest, latest], throughput over [earliest, end].
+        // A zero span leaves rate = requests and throughput = successes.
+        self.rate = self.requests as f64;
+        self.throughput = self.successes as f64;
         let (Some(first), Some(last), Some(end)) = (self.earliest, self.latest, self.end) else {
             return;
         };
         let issue = last.duration_since(first).unwrap_or_default().as_secs_f64();
         let total = end.duration_since(first).unwrap_or_default().as_secs_f64();
-        if self.requests > 1 && issue > 0.0 {
-            self.rate = (self.requests - 1) as f64 / issue;
+        if issue > 0.0 {
+            self.rate = self.requests as f64 / issue;
         }
         if total > 0.0 {
             self.throughput = self.successes as f64 / total;
@@ -197,7 +210,7 @@ mod tests {
         let m = closed();
         // latest ts = 990ms, its latency = 10ms => end 1.0s; span 1s; 90 successes.
         assert!((m.throughput - 90.0).abs() < 0.5, "got {}", m.throughput);
-        // rate counts all requests: 99 intervals over 0.99s = 100/s.
-        assert!(m.rate > m.throughput);
+        // vegeta: rate = requests / (latest - earliest) = 100 / 0.99s.
+        assert!((m.rate - 100.0 / 0.99).abs() < 1e-6, "got {}", m.rate);
     }
 }
