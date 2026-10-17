@@ -100,6 +100,51 @@ impl Pacer for LinearPacer {
     }
 }
 
+/// Fires hits as a Poisson process with the given mean rate. Seeded for
+/// reproducibility; falls back to firing immediately when behind schedule.
+#[derive(Debug)]
+pub struct PoissonPacer {
+    mean_rate: f64,
+    rng: std::sync::Mutex<rand_chacha::ChaCha8Rng>,
+}
+
+impl PoissonPacer {
+    /// `rate` is the mean hits per second; `seed` makes the sequence reproducible.
+    pub fn new(rate: f64, seed: u64) -> Self {
+        use rand::SeedableRng;
+        Self {
+            mean_rate: rate,
+            rng: std::sync::Mutex::new(rand_chacha::ChaCha8Rng::seed_from_u64(seed)),
+        }
+    }
+}
+
+impl Pacer for PoissonPacer {
+    fn pace(&self, elapsed: Duration, hits: u64) -> (Duration, bool) {
+        use rand::Rng;
+        if self.mean_rate <= 0.0 {
+            return (Duration::ZERO, true);
+        }
+        // Behind schedule: fire immediately.
+        if (hits as f64) < self.mean_rate * elapsed.as_secs_f64() {
+            return (Duration::ZERO, false);
+        }
+        let mut u: f64 = {
+            let mut rng = self.rng.lock().unwrap_or_else(|e| e.into_inner());
+            // Map [0,1) to (0,1].
+            1.0 - rng.random::<f64>()
+        };
+        if u <= 0.0 {
+            u = f64::MIN_POSITIVE;
+        }
+        (Duration::from_secs_f64(-u.ln() / self.mean_rate), false)
+    }
+
+    fn rate(&self, _elapsed: Duration) -> f64 {
+        self.mean_rate
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +199,55 @@ mod tests {
         let _p: std::sync::Arc<dyn Pacer> =
             std::sync::Arc::new(ConstantPacer { freq: 1, per: Duration::from_secs(1) });
         fn _t(_: &dyn Targeter) {}
+    }
+
+    const POISSON_SEED: u64 = 42;
+
+    #[test]
+    fn poisson_mean_converges() {
+        let p = PoissonPacer::new(200.0, POISSON_SEED);
+        let mut elapsed = Duration::ZERO;
+        let mut hits = 0u64;
+        while elapsed < Duration::from_secs(10) {
+            let (wait, stop) = p.pace(elapsed, hits);
+            assert!(!stop);
+            elapsed += wait;
+            hits += 1;
+        }
+        let diff = (hits as f64 - 2000.0).abs();
+        assert!(diff <= 100.0, "hits = {hits}, want 2000 +/- 5%");
+    }
+
+    #[test]
+    fn poisson_catches_up() {
+        let p = PoissonPacer::new(200.0, POISSON_SEED);
+        let (wait, stop) = p.pace(Duration::from_secs(5), 10);
+        assert_eq!(wait, Duration::ZERO);
+        assert!(!stop);
+    }
+
+    #[test]
+    fn poisson_zero_rate_stops() {
+        let p = PoissonPacer::new(0.0, POISSON_SEED);
+        let (_, stop) = p.pace(Duration::from_secs(1), 0);
+        assert!(stop);
+    }
+
+    #[test]
+    fn poisson_rate_is_mean_rate() {
+        let p = PoissonPacer::new(123.0, POISSON_SEED);
+        assert_eq!(p.rate(Duration::from_secs(7)), 123.0);
+    }
+
+    #[test]
+    fn poisson_same_seed_is_deterministic() {
+        let a = PoissonPacer::new(50.0, 7);
+        let b = PoissonPacer::new(50.0, 7);
+        let mut elapsed = Duration::ZERO;
+        for hits in 0..100u64 {
+            let wa = a.pace(elapsed, hits);
+            assert_eq!(wa, b.pace(elapsed, hits));
+            elapsed += wa.0;
+        }
     }
 }

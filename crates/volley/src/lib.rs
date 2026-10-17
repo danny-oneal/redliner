@@ -7,5 +7,5 @@ pub mod target;
 
 pub use error::Error;
 pub use metrics::{Latencies, Metrics};
-pub use pacer::{ConstantPacer, LinearPacer, Pacer, Targeter};
+pub use pacer::{ConstantPacer, LinearPacer, Pacer, PoissonPacer, Targeter};
 pub use target::{AttackResult, Target};
