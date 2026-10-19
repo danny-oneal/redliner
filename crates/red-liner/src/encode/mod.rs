@@ -11,6 +11,7 @@ use volley::{Target, Targeter};
 
 pub use graphql::GraphqlEncoder;
 
+use crate::config::Scenario;
 use crate::mix::WeightedMix;
 
 /// Failures while building headers or encoding a request.
@@ -24,16 +25,23 @@ pub enum EncodeError {
     Body(String),
 }
 
-/// Picks a weighted scenario per call and encodes it as a GraphQL request.
-/// Reproducible from a single seed.
-pub struct GraphqlTargeter {
-    enc: GraphqlEncoder,
+/// A protocol encoder: turns a picked scenario into a volley `Target`.
+pub trait Encoder: Send + Sync {
+    fn encode(&self, t: &mut Target, sc: &Scenario) -> Result<(), EncodeError>;
+    /// Recovers the operation name from a request's method and URL.
+    fn operation(&self, method: &str, url: &str) -> Option<String>;
+}
+
+/// Picks a weighted scenario per call and encodes it via the configured
+/// protocol encoder. Reproducible from a single seed.
+pub struct MixTargeter {
+    enc: Box<dyn Encoder>,
     mix: WeightedMix,
     rng: Mutex<ChaCha8Rng>,
 }
 
-impl GraphqlTargeter {
-    pub fn new(enc: GraphqlEncoder, mix: WeightedMix, seed: u64) -> Self {
+impl MixTargeter {
+    pub fn new(enc: Box<dyn Encoder>, mix: WeightedMix, seed: u64) -> Self {
         Self {
             enc,
             mix,
@@ -42,7 +50,7 @@ impl GraphqlTargeter {
     }
 }
 
-impl Targeter for GraphqlTargeter {
+impl Targeter for MixTargeter {
     fn target(&self, t: &mut Target) -> Result<(), volley::Error> {
         let mut rng = self
             .rng
@@ -78,8 +86,8 @@ mod tests {
             ..Default::default()
         };
         let mk = || {
-            GraphqlTargeter::new(
-                GraphqlEncoder::new(&cfg).unwrap(),
+            MixTargeter::new(
+                Box::new(GraphqlEncoder::new(&cfg).unwrap()),
                 WeightedMix::new(vec![sc("A", 1.0), sc("B", 1.0)]),
                 7,
             )

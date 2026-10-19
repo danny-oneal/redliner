@@ -3,7 +3,7 @@ use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_AL
 use volley::Target;
 
 use super::headers::base_headers;
-use super::EncodeError;
+use super::{EncodeError, Encoder};
 use crate::config::{Scenario, TargetConfig};
 
 /// Go `url.QueryEscape` keeps only alphanumerics and `-_.~`.
@@ -52,6 +52,16 @@ impl GraphqlEncoder {
     }
 }
 
+impl Encoder for GraphqlEncoder {
+    fn encode(&self, t: &mut Target, sc: &Scenario) -> Result<(), EncodeError> {
+        GraphqlEncoder::encode(self, t, sc)
+    }
+
+    fn operation(&self, _method: &str, url: &str) -> Option<String> {
+        GraphqlEncoder::operation(self, url)
+    }
+}
+
 fn query_escape(s: &str) -> String {
     utf8_percent_encode(s, QUERY_SET)
         .to_string()
@@ -95,7 +105,7 @@ mod tests {
         assert_eq!(v["operationName"], "GetProduct");
         assert_eq!(v["query"], "query GetProduct { p { id } }");
         assert_eq!(v["variables"]["id"], 5);
-        assert_eq!(e.operation(&t.url).as_deref(), Some("GetProduct"));
+        assert_eq!(Encoder::operation(&e, "POST", &t.url).as_deref(), Some("GetProduct"));
     }
 
     #[test]
@@ -103,7 +113,7 @@ mod tests {
         let e = enc();
         let mut t = Target::default();
         e.encode(&mut t, &scenario("Get Product&x=1")).unwrap();
-        assert_eq!(e.operation(&t.url).as_deref(), Some("Get Product&x=1"));
-        assert_eq!(e.operation("http://h/graphql"), None);
+        assert_eq!(Encoder::operation(&e, "POST", &t.url).as_deref(), Some("Get Product&x=1"));
+        assert_eq!(Encoder::operation(&e, "POST", "http://h/graphql"), None);
     }
 }
