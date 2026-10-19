@@ -179,6 +179,7 @@ mod tests {
                     error: if ok { None } else { Some("boom".into()) },
                     method: "GET".into(),
                     url: "http://x".into(),
+                    body: vec![],
                 }
             })
             .collect()

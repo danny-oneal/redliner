@@ -76,6 +76,61 @@ async fn spawn_mock_seeded(seed: Option<&'static str>) -> Mock {
     Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines }
 }
 
+/// Like `spawn_mock`, but answers EVERY request with a GraphQL `errors`
+/// payload (HTTP 200) so the app-layer checker reclassifies every hit.
+async fn spawn_error_mock() -> Mock {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let (h, b, l) = (hits.clone(), bodies.clone(), lines.clone());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else { break };
+            let (h, b, l) = (h.clone(), b.clone(), l.clone());
+            tokio::spawn(async move {
+                let mut data = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    data.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&data).to_string();
+                    if let Some(idx) = text.find("\r\n\r\n") {
+                        let len = text[..idx]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if data.len() >= idx + 4 + len {
+                            h.fetch_add(1, Ordering::SeqCst);
+                            let body = text[idx + 4..].to_string();
+                            let first = text.split("\r\n").next().unwrap_or("").to_string();
+                            l.lock().unwrap().push(first);
+                            let is_post = text.starts_with("POST");
+                            b.lock().unwrap().push(format!("{is_post}|{body}"));
+                            let payload = "{\"errors\":[{\"message\":\"boom\"}]}";
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                                payload.len()
+                            );
+                            let _ = sock.write_all(resp.as_bytes()).await;
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines }
+}
+
 fn tempdir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("red-liner-e2e-{}-{tag}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
@@ -101,12 +156,18 @@ fn args(cfg: &std::path::Path, extra: &[&str]) -> Args {
     Args::parse_from(v)
 }
 
+/// The newest timestamped report dir under `base` (follows `latest`).
+fn newest_report(base: &std::path::Path) -> std::path::PathBuf {
+    let target = std::fs::read_link(base.join("latest")).expect("latest symlink");
+    base.join(target)
+}
+
 #[tokio::test]
 async fn e2e_graphql_runs_and_exits_zero() {
     let mock = spawn_mock().await;
     let dir = tempdir("ok");
     let cfg = write_cfg(&dir, &mock.url, "");
-    assert_eq!(run(args(&cfg, &[])).await, Exit::Ok);
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
     let n = mock.hits.load(Ordering::SeqCst);
     assert!(n > 10, "expected requests, saw {n}");
     let bodies = mock.bodies.lock().unwrap();
@@ -127,7 +188,7 @@ async fn e2e_rest_runs_and_exits_zero() {
         ),
     )
     .unwrap();
-    assert_eq!(run(args(&p, &[])).await, Exit::Ok);
+    assert_eq!(run(args(&p, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
     let n = mock.hits.load(Ordering::SeqCst);
     assert!(n > 10, "expected requests, saw {n}");
     let lines = mock.lines.lock().unwrap();
@@ -139,7 +200,46 @@ async fn e2e_slo_violation_exits_one() {
     let mock = spawn_mock().await;
     let dir = tempdir("slo");
     let cfg = write_cfg(&dir, &mock.url, "slos:\n  throughput_min: 1000000\n");
-    assert_eq!(run(args(&cfg, &[])).await, Exit::SloFailed);
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::SloFailed);
+}
+
+#[tokio::test]
+async fn e2e_graphql_errors_fail_slo() {
+    let mock = spawn_error_mock().await;
+    let dir = tempdir("gqlerr");
+    // GraphQL default checks.graphql_errors = true; every 200 carries an
+    // errors payload, so the checker drops success to ~0 and the enforced
+    // success_rate SLO fails the run.
+    let cfg = write_cfg(&dir, &mock.url, "slos:\n  success_rate: 0.99\n");
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::SloFailed);
+    assert!(mock.hits.load(Ordering::SeqCst) > 10);
+}
+
+#[tokio::test]
+async fn e2e_writes_report_dir() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("reportdir");
+    let cfg = write_cfg(&dir, &mock.url, "report:\n  junit: true\n");
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
+
+    let report = newest_report(&dir);
+    for f in [
+        "text.txt",
+        "histogram.txt",
+        "metrics.json",
+        "per_operation.json",
+        "run_manifest.json",
+        "junit.xml",
+        "results.jsonl",
+    ] {
+        assert!(report.join(f).is_file(), "{f} missing in {report:?}");
+    }
+    let manifest = std::fs::read_to_string(report.join("run_manifest.json")).unwrap();
+    assert!(manifest.contains("\"passed\": true"), "manifest not finalized: {manifest}");
+    assert!(manifest.contains("\"requests\":"), "manifest missing requests: {manifest}");
+    // results.jsonl carries one line per recorded request.
+    let raw = std::fs::read_to_string(report.join("results.jsonl")).unwrap();
+    assert!(raw.lines().filter(|l| !l.is_empty()).count() > 10, "raw stream short");
 }
 
 #[tokio::test]
@@ -147,9 +247,11 @@ async fn validate_flag_exits_zero_without_firing() {
     let mock = spawn_mock().await;
     let dir = tempdir("val");
     let cfg = write_cfg(&dir, &mock.url, "");
-    assert_eq!(run(args(&cfg, &["--validate"])).await, Exit::Ok);
+    assert_eq!(run(args(&cfg, &["--validate", "--out", dir.to_str().unwrap()])).await, Exit::Ok);
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     assert_eq!(mock.hits.load(Ordering::SeqCst), 0);
+    // --validate returns before the attack, so no report dir is created.
+    assert!(!dir.join("latest").exists());
 }
 
 #[tokio::test]
@@ -173,7 +275,7 @@ async fn e2e_harvest_seeds_pool_and_attacks() {
         ),
     )
     .unwrap();
-    assert_eq!(run(args(&p, &[])).await, Exit::Ok);
+    assert_eq!(run(args(&p, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
     let lines = mock.lines.lock().unwrap();
     assert_eq!(
         lines[0], "GET /seed HTTP/1.1",

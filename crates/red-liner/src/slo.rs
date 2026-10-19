@@ -6,7 +6,7 @@ use volley::Metrics;
 
 use crate::config::SloConfig;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SloResult {
     pub name: String,
     pub target: String,
@@ -80,6 +80,7 @@ mod tests {
                 error: None,
                 method: "POST".into(),
                 url: "http://x".into(),
+                body: vec![],
             });
         }
         m.close();

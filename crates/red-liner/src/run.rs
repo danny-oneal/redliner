@@ -1,16 +1,20 @@
 //! Run orchestration (Go `run()` in `main.go`).
 
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use volley::{Attacker, AttackerConfig, ConstantPacer, Metrics, Pacer};
 
+use crate::checks::Checker;
 use crate::cli::Args;
 use crate::config::{load_config_file, Config};
 use crate::data;
 use crate::encode::{new_encoder, MixTargeter};
 use crate::mix::WeightedMix;
 use crate::phases::build_phases;
+use crate::report::{self, Collector, RunManifest};
 use crate::slo::{self, fmt_dur, SloResult};
 
 /// Process exit status.
@@ -88,6 +92,24 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
     let targeter = Arc::new(MixTargeter::new(enc, mix, pools, cfg.load.seed as u64));
     let phases = build_phases(&cfg.load)?;
 
+    // Report scaffolding: create the run dir and write an initial manifest
+    // before any traffic, so an aborted run still leaves a trail.
+    let wall_start = SystemTime::now();
+    let report_dir = report::make_report_dir(&cfg.report.dir, wall_start)
+        .map_err(|e| anyhow::anyhow!("report dir: {e}"))?;
+    let mut manifest = RunManifest {
+        started_at: report::utc_rfc3339(wall_start),
+        finished_at: None,
+        config_file: args.config.display().to_string(),
+        config: cfg.clone(),
+        seed: cfg.load.seed,
+        requests: None,
+        slo_results: Vec::new(),
+        passed: None,
+    };
+    report::write_manifest(&report_dir, &manifest)
+        .map_err(|e| anyhow::anyhow!("write manifest: {e}"))?;
+
     let start = Instant::now();
 
     // Warmup: uniform, unmeasured, 10% of the first phase's rate.
@@ -101,8 +123,16 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
         while rx.recv().await.is_some() {}
     }
 
-    // One fresh attacker per phase, all results drained into one Metrics.
-    let mut metrics = Metrics::new();
+    // One fresh attacker per phase; results flow through the checker (which
+    // reclassifies app-layer failures) into the collector.
+    let checker = Checker::new(&cfg.checks);
+    let raw = cfg
+        .report
+        .keep_raw
+        .unwrap_or(true)
+        .then(|| report_dir.join("results.jsonl"));
+    let mut collector =
+        Collector::new(raw.as_deref()).map_err(|e| anyhow::anyhow!("open results.jsonl: {e}"))?;
     for ph in &phases {
         eprintln!("attack: {} for {:?} (nominal {} rps)", ph.name, ph.duration, ph.rate);
         let attacker = new_attacker(&cfg)?;
@@ -112,23 +142,44 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
             ph.duration,
             ph.name.clone(),
         );
-        while let Some(r) = rx.recv().await {
-            metrics.add(&r);
+        while let Some(mut r) = rx.recv().await {
+            checker.apply(&mut r);
+            let op = targeter.operation(&r.method, &r.url);
+            collector.add(&r, &ph.name, op.as_deref());
         }
     }
-    metrics.close();
+    collector.close();
     let elapsed = start.elapsed();
 
-    let results = slo::evaluate(&cfg.slos, &metrics);
-    print_summary(&metrics, &results, elapsed);
+    let results = slo::evaluate(&cfg.slos, collector.overall());
+    let passed = slo::passed(&results);
 
-    if cfg.slos.enforced() && !slo::passed(&results) {
+    manifest.finished_at = Some(report::utc_rfc3339(SystemTime::now()));
+    manifest.requests = Some(collector.overall().requests);
+    manifest.slo_results = results.clone();
+    manifest.passed = Some(passed);
+    report::write_reports(&report_dir, &collector, &manifest)
+        .map_err(|e| anyhow::anyhow!("write reports: {e}"))?;
+    if cfg.report.junit {
+        report::write_junit(&report_dir.join("junit.xml"), &results, elapsed)
+            .map_err(|e| anyhow::anyhow!("write junit: {e}"))?;
+    }
+
+    print_summary(collector.overall(), collector.per_op(), &results, elapsed, &report_dir);
+
+    if cfg.slos.enforced() && !passed {
         return Ok(Exit::SloFailed);
     }
     Ok(Exit::Ok)
 }
 
-fn print_summary(m: &Metrics, slos: &[SloResult], elapsed: Duration) {
+fn print_summary(
+    m: &Metrics,
+    per_op: &BTreeMap<String, Metrics>,
+    slos: &[SloResult],
+    elapsed: Duration,
+    report_dir: &Path,
+) {
     println!();
     println!("==== capacity_bench summary ====");
     println!("elapsed       : {}", fmt_dur(elapsed));
@@ -140,6 +191,16 @@ fn print_summary(m: &Metrics, slos: &[SloResult], elapsed: Duration) {
     println!("latency p95   : {}", fmt_dur(m.latencies.p95));
     println!("latency p99   : {}", fmt_dur(m.latencies.p99));
     println!("latency max   : {}", fmt_dur(m.latencies.max));
+
+    if !per_op.is_empty() {
+        println!("\nper operation:");
+        for s in report::summarize(per_op) {
+            println!(
+                "  {:<24} n={:<8} ok={:6.2}%  p50={:<10} p95={:<10} p99={}",
+                s.name, s.requests, s.success * 100.0, s.p50, s.p95, s.p99
+            );
+        }
+    }
 
     if !m.errors.is_empty() {
         println!("\nerrors        : {} distinct", m.errors.len());
@@ -162,4 +223,6 @@ fn print_summary(m: &Metrics, slos: &[SloResult], elapsed: Duration) {
             );
         }
     }
+
+    println!("\nreports in    : {}", report_dir.display());
 }
