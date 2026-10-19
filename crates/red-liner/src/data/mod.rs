@@ -10,6 +10,8 @@ use serde_json::Value;
 use crate::config::DataConfig;
 use crate::encode::EncodeError;
 
+pub mod harvest;
+
 /// Build-time failures while resolving pools or extracting values.
 #[derive(Debug, thiserror::Error)]
 pub enum DataError {
@@ -21,6 +23,18 @@ pub enum DataError {
     EmptyFile(String),
     #[error("path {path:?}: {msg}")]
     Path { path: String, msg: String },
+    #[error("{0}")]
+    Encode(#[from] EncodeError),
+    #[error("{0} — is the server up?")]
+    Http(String),
+    #[error("status {code} from {url}")]
+    Status { code: u16, url: String },
+    #[error("decode harvest response: {0}")]
+    Decode(String),
+    #[error("harvest query returned GraphQL errors: {0}")]
+    GraphqlErrors(String),
+    #[error("pool {pool:?}: path {path:?} matched nothing — schema mismatch?")]
+    EmptyMatch { pool: String, path: String },
     #[error("pool {name:?}: {source}")]
     Pool {
         name: String,

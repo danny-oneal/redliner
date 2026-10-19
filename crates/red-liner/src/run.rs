@@ -83,7 +83,8 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
 
     let enc = new_encoder(&cfg)?;
     let mix = WeightedMix::new(cfg.scenarios.clone());
-    let pools = data::build_pools(&cfg.data)?;
+    let mut pools = data::build_pools(&cfg.data)?;
+    data::harvest::run_harvest(&cfg, &mut pools).await?;
     let targeter = Arc::new(MixTargeter::new(enc, mix, pools, cfg.load.seed as u64));
     let phases = build_phases(&cfg.load)?;
 
