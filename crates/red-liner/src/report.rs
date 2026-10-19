@@ -186,6 +186,12 @@ pub fn write_reports(dir: &Path, c: &Collector, manifest: &RunManifest) -> std::
     write_json(&dir.join("run_manifest.json"), manifest)
 }
 
+/// Writes just the manifest — used before the attack so an aborted run still
+/// leaves an audit trail; `write_reports` overwrites it with the finalized one.
+pub fn write_manifest(dir: &Path, manifest: &RunManifest) -> std::io::Result<()> {
+    write_json(&dir.join("run_manifest.json"), manifest)
+}
+
 /// Writes SLO verdicts as a JUnit `<testsuite>` for CI ingestion
 /// (Go `writeJUnit`).
 pub fn write_junit(path: &Path, slos: &[SloResult], elapsed: Duration) -> std::io::Result<()> {

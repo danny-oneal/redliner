@@ -71,6 +71,11 @@ impl MixTargeter {
             rng: Mutex::new(ChaCha8Rng::seed_from_u64(seed)),
         }
     }
+
+    /// Recovers the operation name for a fired request, for report attribution.
+    pub fn operation(&self, method: &str, url: &str) -> Option<String> {
+        self.enc.operation(method, url)
+    }
 }
 
 impl Targeter for MixTargeter {

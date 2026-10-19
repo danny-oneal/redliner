@@ -156,12 +156,18 @@ fn args(cfg: &std::path::Path, extra: &[&str]) -> Args {
     Args::parse_from(v)
 }
 
+/// The newest timestamped report dir under `base` (follows `latest`).
+fn newest_report(base: &std::path::Path) -> std::path::PathBuf {
+    let target = std::fs::read_link(base.join("latest")).expect("latest symlink");
+    base.join(target)
+}
+
 #[tokio::test]
 async fn e2e_graphql_runs_and_exits_zero() {
     let mock = spawn_mock().await;
     let dir = tempdir("ok");
     let cfg = write_cfg(&dir, &mock.url, "");
-    assert_eq!(run(args(&cfg, &[])).await, Exit::Ok);
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
     let n = mock.hits.load(Ordering::SeqCst);
     assert!(n > 10, "expected requests, saw {n}");
     let bodies = mock.bodies.lock().unwrap();
@@ -182,7 +188,7 @@ async fn e2e_rest_runs_and_exits_zero() {
         ),
     )
     .unwrap();
-    assert_eq!(run(args(&p, &[])).await, Exit::Ok);
+    assert_eq!(run(args(&p, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
     let n = mock.hits.load(Ordering::SeqCst);
     assert!(n > 10, "expected requests, saw {n}");
     let lines = mock.lines.lock().unwrap();
@@ -194,7 +200,7 @@ async fn e2e_slo_violation_exits_one() {
     let mock = spawn_mock().await;
     let dir = tempdir("slo");
     let cfg = write_cfg(&dir, &mock.url, "slos:\n  throughput_min: 1000000\n");
-    assert_eq!(run(args(&cfg, &[])).await, Exit::SloFailed);
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::SloFailed);
 }
 
 #[tokio::test]
@@ -205,8 +211,35 @@ async fn e2e_graphql_errors_fail_slo() {
     // errors payload, so the checker drops success to ~0 and the enforced
     // success_rate SLO fails the run.
     let cfg = write_cfg(&dir, &mock.url, "slos:\n  success_rate: 0.99\n");
-    assert_eq!(run(args(&cfg, &[])).await, Exit::SloFailed);
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::SloFailed);
     assert!(mock.hits.load(Ordering::SeqCst) > 10);
+}
+
+#[tokio::test]
+async fn e2e_writes_report_dir() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("reportdir");
+    let cfg = write_cfg(&dir, &mock.url, "report:\n  junit: true\n");
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
+
+    let report = newest_report(&dir);
+    for f in [
+        "text.txt",
+        "histogram.txt",
+        "metrics.json",
+        "per_operation.json",
+        "run_manifest.json",
+        "junit.xml",
+        "results.jsonl",
+    ] {
+        assert!(report.join(f).is_file(), "{f} missing in {report:?}");
+    }
+    let manifest = std::fs::read_to_string(report.join("run_manifest.json")).unwrap();
+    assert!(manifest.contains("\"passed\": true"), "manifest not finalized: {manifest}");
+    assert!(manifest.contains("\"requests\":"), "manifest missing requests: {manifest}");
+    // results.jsonl carries one line per recorded request.
+    let raw = std::fs::read_to_string(report.join("results.jsonl")).unwrap();
+    assert!(raw.lines().filter(|l| !l.is_empty()).count() > 10, "raw stream short");
 }
 
 #[tokio::test]
@@ -214,9 +247,11 @@ async fn validate_flag_exits_zero_without_firing() {
     let mock = spawn_mock().await;
     let dir = tempdir("val");
     let cfg = write_cfg(&dir, &mock.url, "");
-    assert_eq!(run(args(&cfg, &["--validate"])).await, Exit::Ok);
+    assert_eq!(run(args(&cfg, &["--validate", "--out", dir.to_str().unwrap()])).await, Exit::Ok);
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     assert_eq!(mock.hits.load(Ordering::SeqCst), 0);
+    // --validate returns before the attack, so no report dir is created.
+    assert!(!dir.join("latest").exists());
 }
 
 #[tokio::test]
@@ -240,7 +275,7 @@ async fn e2e_harvest_seeds_pool_and_attacks() {
         ),
     )
     .unwrap();
-    assert_eq!(run(args(&p, &[])).await, Exit::Ok);
+    assert_eq!(run(args(&p, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
     let lines = mock.lines.lock().unwrap();
     assert_eq!(
         lines[0], "GET /seed HTTP/1.1",
