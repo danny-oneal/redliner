@@ -162,8 +162,22 @@ mod tests {
         let mut ta = Target::default();
         enc.encode(&mut ta, &a).unwrap();
         assert_eq!(ta.header["x-a"], "1");
-        // The shared base is untouched: rebuilding it from config yields no x-a.
-        assert!(base_headers(&target("http://h")).unwrap().get("x-a").is_none());
+    }
+
+    #[test]
+    fn rest_scenario_header_overrides_base_header() {
+        // base_headers sets accept: application/json; the scenario must win.
+        let a = sc("A", "GET", "/a", "", &[("Accept", "text/html")]);
+        let b = sc("B", "GET", "/b", "", &[]);
+        let enc = RestEncoder::new(&target("http://h"), &[a.clone(), b.clone()]).unwrap();
+        let mut ta = Target::default();
+        enc.encode(&mut ta, &a).unwrap();
+        assert_eq!(ta.header["accept"], "text/html");
+        assert_eq!(ta.header.get_all("accept").iter().count(), 1);
+        // The override did not mutate the shared base seen by other routes.
+        let mut tb = Target::default();
+        enc.encode(&mut tb, &b).unwrap();
+        assert_eq!(tb.header["accept"], "application/json");
     }
 
     #[test]
