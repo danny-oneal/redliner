@@ -24,6 +24,8 @@ pub struct AttackResult {
     pub error: Option<String>,
     pub method: String,
     pub url: String,
+    /// Raw response body; empty on a transport/target failure.
+    pub body: Vec<u8>,
 }
 
 #[cfg(test)]

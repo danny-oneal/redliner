@@ -80,6 +80,7 @@ mod tests {
                 error: None,
                 method: "POST".into(),
                 url: "http://x".into(),
+                body: vec![],
             });
         }
         m.close();

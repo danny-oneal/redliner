@@ -165,6 +165,7 @@ async fn run_hit<T: Targeter + ?Sized>(
             error: Some(e.to_string()),
             method: target.method.to_string(),
             url: target.url,
+            body: Vec::new(),
         };
     }
 
@@ -195,6 +196,7 @@ async fn run_hit<T: Targeter + ?Sized>(
                     error: None,
                     method: method.to_string(),
                     url,
+                    body: body.to_vec(),
                 },
                 Err(e) => AttackResult {
                     attack: name,
@@ -207,6 +209,7 @@ async fn run_hit<T: Targeter + ?Sized>(
                     error: Some(e.to_string()),
                     method: method.to_string(),
                     url,
+                    body: Vec::new(),
                 },
             }
         }
@@ -221,6 +224,7 @@ async fn run_hit<T: Targeter + ?Sized>(
             error: Some(e.to_string()),
             method: method.to_string(),
             url,
+            body: Vec::new(),
         },
     }
 }
@@ -268,6 +272,32 @@ mod tests {
         format!("http://{addr}/")
     }
 
+    /// Spawns a server that answers every request with 200 OK and a fixed
+    /// JSON body, then closes the connection. Returns the bound base URL.
+    async fn spawn_body_server(body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => break,
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 2048];
+                    let _ = socket.read(&mut buf).await;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    let _ = socket.flush().await;
+                });
+            }
+        });
+        format!("http://{addr}/")
+    }
+
     fn cfg(timeout: Duration) -> AttackerConfig {
         AttackerConfig {
             timeout,
@@ -302,6 +332,31 @@ mod tests {
         for r in &results {
             assert_eq!(r.code, 200, "unexpected code, err = {:?}", r.error);
             assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        }
+    }
+
+    #[tokio::test]
+    async fn attack_captures_body() {
+        let body = "{\"data\":{\"ping\":true}}";
+        let url = spawn_body_server(body).await;
+        let attacker = Attacker::new(cfg(Duration::from_secs(5))).unwrap();
+        let pacer = Arc::new(ConstantPacer { freq: 50, per: Duration::from_secs(1) });
+        let targeter = Arc::new(UrlTargeter { url });
+
+        let mut rx =
+            attacker.attack(targeter, pacer, Duration::from_millis(300), "body".to_string());
+
+        let mut results = Vec::new();
+        while let Some(r) = rx.recv().await {
+            results.push(r);
+        }
+
+        assert!(!results.is_empty(), "expected some results");
+        for r in &results {
+            assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+            assert_eq!(r.code, 200);
+            assert_eq!(r.body, body.as_bytes(), "body not captured");
+            assert_eq!(r.bytes_in, body.len() as u64);
         }
     }
 
