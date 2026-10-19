@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use volley::{Attacker, AttackerConfig, ConstantPacer, Metrics, Pacer};
 
+use crate::checks::Checker;
 use crate::cli::Args;
 use crate::config::{load_config_file, Config};
 use crate::data;
@@ -102,6 +103,8 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
     }
 
     // One fresh attacker per phase, all results drained into one Metrics.
+    // The checker reclassifies app-layer failures before they are counted.
+    let checker = Checker::new(&cfg.checks);
     let mut metrics = Metrics::new();
     for ph in &phases {
         eprintln!("attack: {} for {:?} (nominal {} rps)", ph.name, ph.duration, ph.rate);
@@ -112,7 +115,8 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
             ph.duration,
             ph.name.clone(),
         );
-        while let Some(r) = rx.recv().await {
+        while let Some(mut r) = rx.recv().await {
+            checker.apply(&mut r);
             metrics.add(&r);
         }
     }

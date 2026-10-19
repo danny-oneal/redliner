@@ -1,5 +1,6 @@
 //! Red Liner: SLO-driven HTTP load testing (library half; `main.rs` is a shim).
 
+pub mod checks;
 pub mod cli;
 pub mod config;
 pub mod data;
