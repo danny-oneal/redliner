@@ -14,6 +14,7 @@ pub use graphql::GraphqlEncoder;
 pub use rest::RestEncoder;
 
 use crate::config::{Config, Protocol, Scenario};
+use crate::data::Pools;
 use crate::mix::WeightedMix;
 
 /// Failures while building headers or encoding a request.
@@ -25,11 +26,21 @@ pub enum EncodeError {
     InvalidHeader(String),
     #[error("encode body: {0}")]
     Body(String),
+    #[error("unknown pool {0}")]
+    UnknownPool(String),
+    #[error("bad template: {0}")]
+    BadTemplate(String),
 }
 
 /// A protocol encoder: turns a picked scenario into a volley `Target`.
 pub trait Encoder: Send + Sync {
-    fn encode(&self, t: &mut Target, sc: &Scenario) -> Result<(), EncodeError>;
+    fn encode(
+        &self,
+        t: &mut Target,
+        sc: &Scenario,
+        pools: &Pools,
+        rng: &mut ChaCha8Rng,
+    ) -> Result<(), EncodeError>;
     /// Recovers the operation name from a request's method and URL.
     fn operation(&self, method: &str, url: &str) -> Option<String>;
 }
@@ -47,14 +58,16 @@ pub fn new_encoder(cfg: &Config) -> Result<Box<dyn Encoder>, EncodeError> {
 pub struct MixTargeter {
     enc: Box<dyn Encoder>,
     mix: WeightedMix,
+    pools: Pools,
     rng: Mutex<ChaCha8Rng>,
 }
 
 impl MixTargeter {
-    pub fn new(enc: Box<dyn Encoder>, mix: WeightedMix, seed: u64) -> Self {
+    pub fn new(enc: Box<dyn Encoder>, mix: WeightedMix, pools: Pools, seed: u64) -> Self {
         Self {
             enc,
             mix,
+            pools,
             rng: Mutex::new(ChaCha8Rng::seed_from_u64(seed)),
         }
     }
@@ -68,7 +81,7 @@ impl Targeter for MixTargeter {
             .map_err(|_| volley::Error::Build("rng lock poisoned".into()))?;
         let sc = self.mix.pick(&mut *rng);
         self.enc
-            .encode(t, sc)
+            .encode(t, sc, &self.pools, &mut *rng)
             .map_err(|e| volley::Error::Build(e.to_string()))
     }
 }
@@ -99,6 +112,7 @@ mod tests {
             MixTargeter::new(
                 Box::new(GraphqlEncoder::new(&cfg).unwrap()),
                 WeightedMix::new(vec![sc("A", 1.0), sc("B", 1.0)]),
+                crate::data::Pools::new(),
                 7,
             )
         };

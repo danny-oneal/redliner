@@ -7,6 +7,7 @@ use volley::{Attacker, AttackerConfig, ConstantPacer, Metrics, Pacer};
 
 use crate::cli::Args;
 use crate::config::{load_config_file, Config};
+use crate::data;
 use crate::encode::{new_encoder, MixTargeter};
 use crate::mix::WeightedMix;
 use crate::phases::build_phases;
@@ -82,7 +83,9 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
 
     let enc = new_encoder(&cfg)?;
     let mix = WeightedMix::new(cfg.scenarios.clone());
-    let targeter = Arc::new(MixTargeter::new(enc, mix, cfg.load.seed as u64));
+    let mut pools = data::build_pools(&cfg.data)?;
+    data::harvest::run_harvest(&cfg, &mut pools).await?;
+    let targeter = Arc::new(MixTargeter::new(enc, mix, pools, cfg.load.seed as u64));
     let phases = build_phases(&cfg.load)?;
 
     let start = Instant::now();

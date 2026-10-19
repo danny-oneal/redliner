@@ -1,9 +1,11 @@
 use http::{HeaderMap, HeaderName, HeaderValue, Method};
+use rand_chacha::ChaCha8Rng;
 use volley::Target;
 
 use super::headers::base_headers;
 use super::{EncodeError, Encoder};
 use crate::config::{Scenario, TargetConfig};
+use crate::data::{render_string, Pools};
 
 struct RestRoute {
     name: String,
@@ -48,19 +50,28 @@ impl RestEncoder {
 }
 
 impl Encoder for RestEncoder {
-    fn encode(&self, t: &mut Target, sc: &Scenario) -> Result<(), EncodeError> {
+    fn encode(
+        &self,
+        t: &mut Target,
+        sc: &Scenario,
+        pools: &Pools,
+        rng: &mut ChaCha8Rng,
+    ) -> Result<(), EncodeError> {
         let route = self
             .routes
             .iter()
             .find(|r| r.name == sc.name)
             .ok_or_else(|| EncodeError::InvalidHeader(format!("unknown scenario {}", sc.name)))?;
-        // SEAM: {{placeholder}} pool templating will render path/body in the data-pools plan; static pass uses the raw strings.
         t.method = Method::from_bytes(route.method.as_bytes())
             .map_err(|e| EncodeError::InvalidHeader(format!("method {}: {e}", route.method)))?;
-        t.url = format!("{}{}", self.base_url, sc.request.path);
+        t.url = format!(
+            "{}{}",
+            self.base_url,
+            render_string(&sc.request.path, pools, rng)?
+        );
         t.header = route.headers.clone();
         if !sc.request.body.is_empty() {
-            t.body = sc.request.body.clone().into_bytes();
+            t.body = render_string(&sc.request.body, pools, rng)?.into_bytes();
         }
         Ok(())
     }
@@ -98,7 +109,14 @@ mod tests {
     use super::*;
     use crate::config::RequestConfig;
     use http::Method;
+    use crate::data::{Pool, Pools};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
     use std::collections::BTreeMap;
+
+    fn rng() -> ChaCha8Rng {
+        ChaCha8Rng::seed_from_u64(1)
+    }
 
     fn sc(name: &str, method: &str, path: &str, body: &str, hdrs: &[(&str, &str)]) -> Scenario {
         Scenario {
@@ -129,7 +147,7 @@ mod tests {
         let s = sc("GetProduct", "get", "/products/5", "", &[("X-Trace", "t1")]);
         let enc = RestEncoder::new(&target("http://h/"), std::slice::from_ref(&s)).unwrap();
         let mut t = Target::default();
-        enc.encode(&mut t, &s).unwrap();
+        enc.encode(&mut t, &s, &Pools::new(), &mut rng()).unwrap();
         assert_eq!(t.method, Method::GET);
         assert_eq!(t.url, "http://h/products/5");
         assert_eq!(t.header["x-trace"], "t1");
@@ -143,11 +161,11 @@ mod tests {
         let b = sc("B", "POST", "/b", "x", &[("Content-Type", "text/plain")]);
         let enc = RestEncoder::new(&target("http://h"), &[a.clone(), b.clone()]).unwrap();
         let mut t = Target::default();
-        enc.encode(&mut t, &a).unwrap();
+        enc.encode(&mut t, &a, &Pools::new(), &mut rng()).unwrap();
         assert_eq!(t.header["content-type"], "application/json");
         assert_eq!(t.body, b"{\"a\":1}");
         let mut t2 = Target::default();
-        enc.encode(&mut t2, &b).unwrap();
+        enc.encode(&mut t2, &b, &Pools::new(), &mut rng()).unwrap();
         assert_eq!(t2.header["content-type"], "text/plain");
     }
 
@@ -157,10 +175,10 @@ mod tests {
         let b = sc("B", "GET", "/b", "", &[]);
         let enc = RestEncoder::new(&target("http://h"), &[a.clone(), b.clone()]).unwrap();
         let mut t = Target::default();
-        enc.encode(&mut t, &b).unwrap();
+        enc.encode(&mut t, &b, &Pools::new(), &mut rng()).unwrap();
         assert!(t.header.get("x-a").is_none());
         let mut ta = Target::default();
-        enc.encode(&mut ta, &a).unwrap();
+        enc.encode(&mut ta, &a, &Pools::new(), &mut rng()).unwrap();
         assert_eq!(ta.header["x-a"], "1");
     }
 
@@ -171,12 +189,12 @@ mod tests {
         let b = sc("B", "GET", "/b", "", &[]);
         let enc = RestEncoder::new(&target("http://h"), &[a.clone(), b.clone()]).unwrap();
         let mut ta = Target::default();
-        enc.encode(&mut ta, &a).unwrap();
+        enc.encode(&mut ta, &a, &Pools::new(), &mut rng()).unwrap();
         assert_eq!(ta.header["accept"], "text/html");
         assert_eq!(ta.header.get_all("accept").iter().count(), 1);
         // The override did not mutate the shared base seen by other routes.
         let mut tb = Target::default();
-        enc.encode(&mut tb, &b).unwrap();
+        enc.encode(&mut tb, &b, &Pools::new(), &mut rng()).unwrap();
         assert_eq!(tb.header["accept"], "application/json");
     }
 
@@ -190,5 +208,16 @@ mod tests {
         );
         assert_eq!(enc.operation("POST", "http://h/products/42"), None);
         assert_eq!(enc.operation("GET", "http://h/orders/1"), None);
+    }
+
+    #[test]
+    fn rest_encode_renders_path() {
+        let s = sc("GetProduct", "GET", "/products/{{id}}", "", &[]);
+        let enc = RestEncoder::new(&target("http://h"), std::slice::from_ref(&s)).unwrap();
+        let mut pools = Pools::new();
+        pools.insert("id".into(), Pool::List(vec![serde_json::json!(5)]));
+        let mut t = Target::default();
+        enc.encode(&mut t, &s, &pools, &mut rng()).unwrap();
+        assert_eq!(t.url, "http://h/products/5");
     }
 }

@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod config;
+pub mod data;
 pub mod encode;
 pub mod mix;
 pub mod phases;
