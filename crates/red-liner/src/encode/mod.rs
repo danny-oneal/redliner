@@ -2,6 +2,7 @@
 
 pub mod graphql;
 pub mod headers;
+pub mod rest;
 
 use std::sync::Mutex;
 
@@ -10,8 +11,9 @@ use rand_chacha::ChaCha8Rng;
 use volley::{Target, Targeter};
 
 pub use graphql::GraphqlEncoder;
+pub use rest::RestEncoder;
 
-use crate::config::Scenario;
+use crate::config::{Config, Protocol, Scenario};
 use crate::mix::WeightedMix;
 
 /// Failures while building headers or encoding a request.
@@ -30,6 +32,14 @@ pub trait Encoder: Send + Sync {
     fn encode(&self, t: &mut Target, sc: &Scenario) -> Result<(), EncodeError>;
     /// Recovers the operation name from a request's method and URL.
     fn operation(&self, method: &str, url: &str) -> Option<String>;
+}
+
+/// Builds the encoder selected by `target.protocol`.
+pub fn new_encoder(cfg: &Config) -> Result<Box<dyn Encoder>, EncodeError> {
+    Ok(match cfg.target.protocol {
+        Protocol::Graphql => Box::new(GraphqlEncoder::new(&cfg.target)?),
+        Protocol::Rest => Box::new(RestEncoder::new(&cfg.target, &cfg.scenarios)?),
+    })
 }
 
 /// Picks a weighted scenario per call and encodes it via the configured

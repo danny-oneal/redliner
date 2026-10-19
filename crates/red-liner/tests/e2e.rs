@@ -10,6 +10,7 @@ struct Mock {
     url: String,
     hits: Arc<AtomicUsize>,
     bodies: Arc<Mutex<Vec<String>>>,
+    lines: Arc<Mutex<Vec<String>>>,
 }
 
 async fn spawn_mock() -> Mock {
@@ -17,11 +18,12 @@ async fn spawn_mock() -> Mock {
     let addr = listener.local_addr().unwrap();
     let hits = Arc::new(AtomicUsize::new(0));
     let bodies = Arc::new(Mutex::new(Vec::new()));
-    let (h, b) = (hits.clone(), bodies.clone());
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let (h, b, l) = (hits.clone(), bodies.clone(), lines.clone());
     tokio::spawn(async move {
         loop {
             let Ok((mut sock, _)) = listener.accept().await else { break };
-            let (h, b) = (h.clone(), b.clone());
+            let (h, b, l) = (h.clone(), b.clone(), l.clone());
             tokio::spawn(async move {
                 let mut data = Vec::new();
                 let mut buf = [0u8; 4096];
@@ -44,6 +46,8 @@ async fn spawn_mock() -> Mock {
                         if data.len() >= idx + 4 + len {
                             h.fetch_add(1, Ordering::SeqCst);
                             let body = text[idx + 4..].to_string();
+                            let first = text.split("\r\n").next().unwrap_or("").to_string();
+                            l.lock().unwrap().push(first);
                             let is_post = text.starts_with("POST");
                             b.lock().unwrap().push(format!("{is_post}|{body}"));
                             let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"data\":{}}";
@@ -55,7 +59,7 @@ async fn spawn_mock() -> Mock {
             });
         }
     });
-    Mock { url: format!("http://{addr}/graphql"), hits, bodies }
+    Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines }
 }
 
 fn tempdir(tag: &str) -> std::path::PathBuf {
@@ -93,6 +97,27 @@ async fn e2e_graphql_runs_and_exits_zero() {
     assert!(n > 10, "expected requests, saw {n}");
     let bodies = mock.bodies.lock().unwrap();
     assert!(bodies.iter().all(|b| b.starts_with("true|") && b.contains("\"query\"")));
+}
+
+#[tokio::test]
+async fn e2e_rest_runs_and_exits_zero() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("rest");
+    let base = mock.url.trim_end_matches("/graphql");
+    let p = dir.join("cfg.yaml");
+    std::fs::write(
+        &p,
+        format!(
+            "target:\n  url: {base}\n  protocol: rest\nload:\n  profile: constant\n  rate: 50\n  duration: 1s\n\
+             scenarios:\n  - name: ping\n    weight: 1\n    request:\n      method: GET\n      path: /ping\n"
+        ),
+    )
+    .unwrap();
+    assert_eq!(run(args(&p, &[])).await, Exit::Ok);
+    let n = mock.hits.load(Ordering::SeqCst);
+    assert!(n > 10, "expected requests, saw {n}");
+    let lines = mock.lines.lock().unwrap();
+    assert!(lines.iter().any(|l| l.starts_with("GET /ping")), "lines: {lines:?}");
 }
 
 #[tokio::test]

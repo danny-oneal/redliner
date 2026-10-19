@@ -7,7 +7,7 @@ use volley::{Attacker, AttackerConfig, ConstantPacer, Metrics, Pacer};
 
 use crate::cli::Args;
 use crate::config::{load_config_file, Config};
-use crate::encode::{Encoder, GraphqlEncoder, MixTargeter};
+use crate::encode::{new_encoder, MixTargeter};
 use crate::mix::WeightedMix;
 use crate::phases::build_phases;
 use crate::slo::{self, fmt_dur, SloResult};
@@ -80,7 +80,7 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
         cfg.target.url, cfg.load.profile, cfg.load.seed
     );
 
-    let enc: Box<dyn Encoder> = Box::new(GraphqlEncoder::new(&cfg.target)?);
+    let enc = new_encoder(&cfg)?;
     let mix = WeightedMix::new(cfg.scenarios.clone());
     let targeter = Arc::new(MixTargeter::new(enc, mix, cfg.load.seed as u64));
     let phases = build_phases(&cfg.load)?;
