@@ -1,10 +1,12 @@
 use http::{HeaderMap, HeaderValue, Method};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use rand_chacha::ChaCha8Rng;
 use volley::Target;
 
 use super::headers::base_headers;
 use super::{EncodeError, Encoder};
 use crate::config::{Scenario, TargetConfig};
+use crate::data::{render_value, Pools};
 
 /// Go `url.QueryEscape` keeps only alphanumerics and `-_.~`.
 const QUERY_SET: &AsciiSet = &NON_ALPHANUMERIC
@@ -28,12 +30,22 @@ impl GraphqlEncoder {
         })
     }
 
-    pub fn encode(&self, t: &mut Target, sc: &Scenario) -> Result<(), EncodeError> {
-        // SEAM: {{placeholder}} pool templating replaces the static variables pass in the data-pools plan.
+    pub fn encode(
+        &self,
+        t: &mut Target,
+        sc: &Scenario,
+        pools: &Pools,
+        rng: &mut ChaCha8Rng,
+    ) -> Result<(), EncodeError> {
+        let variables = render_value(
+            &serde_json::Value::Object(sc.request.variables.clone().into_iter().collect()),
+            pools,
+            rng,
+        )?;
         let body = serde_json::to_vec(&serde_json::json!({
             "operationName": sc.name,
             "query": sc.request.query,
-            "variables": sc.request.variables,
+            "variables": variables,
         }))
         .map_err(|e| EncodeError::Body(e.to_string()))?;
         t.method = Method::POST;
@@ -53,8 +65,14 @@ impl GraphqlEncoder {
 }
 
 impl Encoder for GraphqlEncoder {
-    fn encode(&self, t: &mut Target, sc: &Scenario) -> Result<(), EncodeError> {
-        GraphqlEncoder::encode(self, t, sc)
+    fn encode(
+        &self,
+        t: &mut Target,
+        sc: &Scenario,
+        pools: &Pools,
+        rng: &mut ChaCha8Rng,
+    ) -> Result<(), EncodeError> {
+        GraphqlEncoder::encode(self, t, sc, pools, rng)
     }
 
     fn operation(&self, _method: &str, url: &str) -> Option<String> {
@@ -72,6 +90,13 @@ fn query_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::RequestConfig;
+    use crate::data::{Pool, Pools};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    fn rng() -> ChaCha8Rng {
+        ChaCha8Rng::seed_from_u64(1)
+    }
 
     fn scenario(name: &str) -> Scenario {
         Scenario {
@@ -97,7 +122,7 @@ mod tests {
     fn graphql_encode_builds_post() {
         let e = enc();
         let mut t = Target::default();
-        e.encode(&mut t, &scenario("GetProduct")).unwrap();
+        e.encode(&mut t, &scenario("GetProduct"), &Pools::new(), &mut rng()).unwrap();
         assert_eq!(t.method, Method::POST);
         assert!(t.url.contains("?op=GetProduct"));
         assert_eq!(t.header["content-type"], "application/json");
@@ -112,8 +137,22 @@ mod tests {
     fn operation_round_trips_escaped_names() {
         let e = enc();
         let mut t = Target::default();
-        e.encode(&mut t, &scenario("Get Product&x=1")).unwrap();
+        e.encode(&mut t, &scenario("Get Product&x=1"), &Pools::new(), &mut rng()).unwrap();
         assert_eq!(Encoder::operation(&e, "POST", &t.url).as_deref(), Some("Get Product&x=1"));
         assert_eq!(Encoder::operation(&e, "POST", "http://h/graphql"), None);
+    }
+
+    #[test]
+    fn graphql_encode_renders_variables() {
+        let e = enc();
+        let mut sc = scenario("GetProduct");
+        sc.request.variables = [("id".to_string(), serde_json::json!("{{id}}"))].into();
+        let mut pools = Pools::new();
+        pools.insert("id".into(), Pool::List(vec![serde_json::json!(5)]));
+        let mut t = Target::default();
+        e.encode(&mut t, &sc, &pools, &mut rng()).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&t.body).unwrap();
+        assert_eq!(v["variables"]["id"], 5);
+        assert!(v["variables"]["id"].is_number());
     }
 }
