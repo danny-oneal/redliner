@@ -224,5 +224,36 @@ fn print_summary(
         }
     }
 
+    if slos.iter().any(|r| !r.passed) {
+        println!("{}", redline_banner());
+    }
+
     println!("\nreports in    : {}", report_dir.display());
+}
+
+/// A redline tachometer bar, printed when a run violates its SLOs.
+fn redline_banner() -> String {
+    let bar = format!("{}{}◉", "█".repeat(38), "▓".repeat(7)); // 46 cells
+    format!(
+        "\n  {rule}\n  {bar}\n  {foot}\n  ⚠  R E D L I N E  ·  SLO violated",
+        rule = "▄".repeat(46),
+        foot = "▀".repeat(46),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redline_banner_marks_the_red() {
+        let b = redline_banner();
+        assert!(b.contains("R E D L I N E"), "{b}");
+        assert!(b.contains("SLO violated"));
+        assert!(b.contains('◉'), "needle missing");
+        // three bar rows line up at the same width (46 cells each).
+        for row in [&"▄".repeat(46), &"▀".repeat(46)] {
+            assert!(b.contains(row.as_str()));
+        }
+    }
 }
