@@ -1,4 +1,4 @@
-//! Red Liner: SLO-driven HTTP load testing (library half; `main.rs` is a shim).
+//! Redliner: SLO-driven HTTP load testing (library half; `main.rs` is a shim).
 
 pub mod checks;
 pub mod cli;

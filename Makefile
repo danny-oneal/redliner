@@ -1,4 +1,4 @@
-# Red Liner — common developer tasks.
+# Redliner — common developer tasks.
 # CONFIG overrides the scenario file used by `run` / `validate`.
 CONFIG ?= configs/graphql-catalog.yaml
 
@@ -16,17 +16,17 @@ test:
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 
-## install the `red-liner` binary into ~/.cargo/bin
+## install the `redliner` binary into ~/.cargo/bin
 install:
-	cargo install --path crates/red-liner --locked
+	cargo install --path crates/redliner --locked
 
 ## run a scenario (make run CONFIG=configs/rest-example.yaml)
 run:
-	cargo run -p red-liner -- --config $(CONFIG)
+	cargo run -p redliner -- --config $(CONFIG)
 
 ## validate a scenario config and exit
 validate:
-	cargo run -p red-liner -- --config $(CONFIG) --validate
+	cargo run -p redliner -- --config $(CONFIG) --validate
 
 ## remove build artifacts
 clean:

@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
-use red_liner::{run, Args, Exit};
+use redliner::{run, Args, Exit};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -132,7 +132,7 @@ async fn spawn_error_mock() -> Mock {
 }
 
 fn tempdir(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("red-liner-e2e-{}-{tag}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("redliner-e2e-{}-{tag}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -151,7 +151,7 @@ fn write_cfg(dir: &std::path::Path, url: &str, slos: &str) -> std::path::PathBuf
 }
 
 fn args(cfg: &std::path::Path, extra: &[&str]) -> Args {
-    let mut v = vec!["red-liner", "--config", cfg.to_str().unwrap()];
+    let mut v = vec!["redliner", "--config", cfg.to_str().unwrap()];
     v.extend_from_slice(extra);
     Args::parse_from(v)
 }
@@ -256,7 +256,7 @@ async fn validate_flag_exits_zero_without_firing() {
 
 #[tokio::test]
 async fn missing_config_exits_error() {
-    let a = Args::parse_from(["red-liner", "--config", "/nonexistent/x.yaml"]);
+    let a = Args::parse_from(["redliner", "--config", "/nonexistent/x.yaml"]);
     assert_eq!(run(a).await, Exit::Error);
 }
 

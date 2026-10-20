@@ -7,7 +7,7 @@ target:
   protocol: rest
   timeout: 5s
   headers:
-    X-Client: red-liner
+    X-Client: redliner
   # auth:                           # uncomment for authenticated APIs
   #   type: bearer                  # none | bearer | basic | header
   #   token_env: BENCH_TOKEN        # read from environment, never from file

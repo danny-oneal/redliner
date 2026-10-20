@@ -58,7 +58,7 @@ pub async fn run(args: Args) -> Exit {
     match run_inner(args).await {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("red-liner: {e:#}");
+            eprintln!("redliner: {e:#}");
             Exit::Error
         }
     }
@@ -181,7 +181,7 @@ fn print_summary(
     report_dir: &Path,
 ) {
     println!();
-    println!("==== red-liner summary ====");
+    println!("==== redliner summary ====");
     println!("elapsed       : {}", fmt_dur(elapsed));
     println!("requests      : {}", m.requests);
     println!("rate (actual) : {:.1} rps", m.rate);

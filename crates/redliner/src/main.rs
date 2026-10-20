@@ -1,5 +1,5 @@
 use clap::Parser;
-use red_liner::{run, Args, Exit};
+use redliner::{run, Args, Exit};
 
 #[tokio::main]
 async fn main() {
