@@ -1,13 +1,13 @@
 # Changelog
 
-All notable changes to Red Liner are documented here. The format follows
+All notable changes to Redliner are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
 ### Removed
-- The Go/Vegeta reference implementation. Red Liner is now a pure Rust
+- The Go/Vegeta reference implementation. Redliner is now a pure Rust
   workspace; the Go sources served only as the behavioral spec during the port.
 
 ## [0.1.0]

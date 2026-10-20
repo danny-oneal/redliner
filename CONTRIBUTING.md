@@ -1,6 +1,6 @@
-# Contributing to Red Liner
+# Contributing to Redliner
 
-Thanks for helping improve Red Liner. This guide covers the local workflow and
+Thanks for helping improve Redliner. This guide covers the local workflow and
 the conventions the codebase already follows.
 
 ## Prerequisites
@@ -15,15 +15,15 @@ the conventions the codebase already follows.
 ```
 Cargo.toml              workspace manifest
 crates/
-  volley/               async load engine (no dependency on red-liner)
-  red-liner/            the binary: config, encoders, pools, checks, SLOs, reports
+  volley/               async load engine (no dependency on redliner)
+  redliner/            the binary: config, encoders, pools, checks, SLOs, reports
 configs/                example scenario files
 docs/                   configuration reference and implementation plans
 ```
 
 `volley` is deliberately protocol- and config-agnostic: it takes plain Rust
 types so it stays reusable and unit-testable. Keep config/CLI/protocol concerns
-in `red-liner`.
+in `redliner`.
 
 ## Everyday commands
 
@@ -42,7 +42,7 @@ warnings are errors.
 
 The project is test-driven: write the failing test first, watch it fail, then
 make it pass. Tests live beside the code they cover (`#[cfg(test)]` modules),
-with end-to-end coverage in `crates/red-liner/tests/` against hand-rolled mock
+with end-to-end coverage in `crates/redliner/tests/` against hand-rolled mock
 servers. Seeded runs are reproducible, so assert on concrete values rather than
 ranges where you can.
 
@@ -64,7 +64,7 @@ starts with a test that reproduces the bug.
 
 - Use [Conventional Commits](https://www.conventionalcommits.org):
   `feat:`, `fix:`, `chore:`, `refactor:`, `test:`, `docs:`, with an optional
-  scope — `feat(red-liner): ...`, `feat(volley): ...`, `feat(config): ...`.
+  scope — `feat(redliner): ...`, `feat(volley): ...`, `feat(config): ...`.
 - Keep each commit coherent and green (`make test && make lint`).
 - In the PR description, say what changed and why, and note the test coverage.
 - Update [`CHANGELOG.md`](CHANGELOG.md) under *Unreleased* for user-visible

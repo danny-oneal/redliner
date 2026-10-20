@@ -6,12 +6,12 @@ use clap::Parser;
 
 use crate::config::{Config, ConfigDuration};
 
-/// Red Liner: SLO-driven HTTP load testing.
+/// Redliner: SLO-driven HTTP load testing.
 #[derive(Parser, Debug, Clone)]
-#[command(name = "red-liner", version)]
+#[command(name = "redliner", version)]
 pub struct Args {
     /// Scenario config file (YAML).
-    #[arg(long, default_value = "red-liner.yaml")]
+    #[arg(long, default_value = "redliner.yaml")]
     pub config: PathBuf,
     /// Override target.url.
     #[arg(long)]
@@ -69,7 +69,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.load.rate = 5.0;
         cfg.target.url = "http://a".into();
-        let args = Args::parse_from(["red-liner", "--rate", "9", "--duration", "2s"]);
+        let args = Args::parse_from(["redliner", "--rate", "9", "--duration", "2s"]);
         args.apply_overrides(&mut cfg);
         assert_eq!(cfg.load.rate, 9.0);
         assert_eq!(cfg.load.duration.as_std().as_secs(), 2);

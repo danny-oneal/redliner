@@ -1,6 +1,6 @@
 # Configuration reference
 
-A Red Liner run is driven by one YAML file (`--config`). CLI flags override
+A Redliner run is driven by one YAML file (`--config`). CLI flags override
 individual values but the file is the source of truth. Unknown keys are
 rejected, so a typo fails the run before any traffic.
 
