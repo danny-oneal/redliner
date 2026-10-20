@@ -1,5 +1,11 @@
 # Red Liner
 
+```
+    R E D   L I N E R
+    ██████████████████████████████████▓▓▓▓▓▓▓◉
+    SLO-driven HTTP load testing — push it to the red line
+```
+
 [![CI](https://github.com/danny-oneal/red-liner/actions/workflows/ci.yml/badge.svg)](https://github.com/danny-oneal/red-liner/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
