@@ -181,7 +181,7 @@ fn print_summary(
     report_dir: &Path,
 ) {
     println!();
-    println!("==== capacity_bench summary ====");
+    println!("==== red-liner summary ====");
     println!("elapsed       : {}", fmt_dur(elapsed));
     println!("requests      : {}", m.requests);
     println!("rate (actual) : {:.1} rps", m.rate);
