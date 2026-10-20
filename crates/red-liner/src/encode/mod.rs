@@ -86,7 +86,7 @@ impl Targeter for MixTargeter {
             .map_err(|_| volley::Error::Build("rng lock poisoned".into()))?;
         let sc = self.mix.pick(&mut *rng);
         self.enc
-            .encode(t, sc, &self.pools, &mut *rng)
+            .encode(t, sc, &self.pools, &mut rng)
             .map_err(|e| volley::Error::Build(e.to_string()))
     }
 }
