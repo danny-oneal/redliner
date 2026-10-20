@@ -6,13 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Removed
-- The Go/Vegeta reference implementation. Redliner is now a pure Rust
-  workspace; the Go sources served only as the behavioral spec during the port.
+## [0.1.0] - 2026-10-20
 
-## [0.1.0]
-
-Initial Rust release — a from-scratch port of the internal Go/Vegeta harness.
+Initial release — a from-scratch Rust port of an internal Go/Vegeta harness.
 
 ### Added
 - **`volley` engine** — protocol-agnostic async load generation: `Target` /
@@ -40,4 +36,9 @@ Initial Rust release — a from-scratch port of the internal Go/Vegeta harness.
   symlink) with a text summary, latency histogram, `metrics.json`, per-operation
   and per-phase breakdowns, `run_manifest.json`, `junit.xml`, and a raw
   `results.jsonl` stream.
+- **Redline banner** — a tachometer bar printed in the run summary when a run
+  violates one or more SLOs.
 - **Reproducibility** — a fixed `load.seed` reproduces pacing and sampling.
+
+[Unreleased]: https://github.com/danny-oneal/redliner/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/danny-oneal/redliner/releases/tag/v0.1.0
