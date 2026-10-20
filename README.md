@@ -6,7 +6,7 @@
     SLO-driven HTTP load testing — push it to the red line
 ```
 
-[![CI](https://github.com/danny-oneal/red-liner/actions/workflows/ci.yml/badge.svg)](https://github.com/danny-oneal/red-liner/actions/workflows/ci.yml)
+[![CI](https://github.com/danny-oneal/redliner/actions/workflows/ci.yml/badge.svg)](https://github.com/danny-oneal/redliner/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **SLO-driven HTTP load testing in Rust.** Redliner fires a declarative,
@@ -50,7 +50,7 @@ Redliner needs a **Rust toolchain ≥ 1.88** ([rustup](https://rustup.rs)).
 cargo install --path crates/redliner --locked
 
 # Or straight from GitHub:
-cargo install --git https://github.com/danny-oneal/red-liner redliner --locked
+cargo install --git https://github.com/danny-oneal/redliner redliner --locked
 ```
 
 Both drop a `redliner` binary in `~/.cargo/bin`. To run from source without

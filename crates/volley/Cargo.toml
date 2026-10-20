@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.88"
 description = "Async paced HTTP load-generation engine (the attack core behind Redliner)"
 license = "MIT"
-repository = "https://github.com/danny-oneal/red-liner"
+repository = "https://github.com/danny-oneal/redliner"
 keywords = ["load-testing", "http", "benchmark", "async", "tokio"]
 categories = ["network-programming", "development-tools::testing"]
 
