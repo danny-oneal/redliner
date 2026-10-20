@@ -1,23 +1,33 @@
-BINARY  := capacity_bench
-CONFIG  ?= configs/graphql-catalog.yaml
+# Red Liner — common developer tasks.
+# CONFIG overrides the scenario file used by `run` / `validate`.
+CONFIG ?= configs/graphql-catalog.yaml
 
-.PHONY: build test vet run validate clean
+.PHONY: build test lint install run validate clean
 
+## build the release binary
 build:
-	go build -o $(BINARY) .
+	cargo build --workspace --release
 
+## run the full test suite
 test:
-	go test ./...
+	cargo test --workspace
 
-vet:
-	go vet ./...
+## lint with clippy, warnings-as-errors
+lint:
+	cargo clippy --workspace --all-targets -- -D warnings
 
-validate: build
-	./$(BINARY) -config $(CONFIG) -validate
+## install the `red-liner` binary into ~/.cargo/bin
+install:
+	cargo install --path crates/red-liner --locked
 
-run: build
-	./$(BINARY) -config $(CONFIG)
+## run a scenario (make run CONFIG=configs/rest-example.yaml)
+run:
+	cargo run -p red-liner -- --config $(CONFIG)
 
+## validate a scenario config and exit
+validate:
+	cargo run -p red-liner -- --config $(CONFIG) --validate
+
+## remove build artifacts
 clean:
-	rm -f $(BINARY)
-	rm -rf reports
+	cargo clean

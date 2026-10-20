@@ -198,7 +198,7 @@ pub fn write_junit(path: &Path, slos: &[SloResult], elapsed: Duration) -> std::i
     let failures = slos.iter().filter(|r| !r.passed).count();
     let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     xml.push_str(&format!(
-        "<testsuite name=\"capacity_bench.slos\" tests=\"{}\" failures=\"{}\" time=\"{:.3}\">\n",
+        "<testsuite name=\"red-liner.slos\" tests=\"{}\" failures=\"{}\" time=\"{:.3}\">\n",
         slos.len(),
         failures,
         elapsed.as_secs_f64()
@@ -206,7 +206,7 @@ pub fn write_junit(path: &Path, slos: &[SloResult], elapsed: Duration) -> std::i
     for r in slos {
         if r.passed {
             xml.push_str(&format!(
-                "  <testcase name=\"{}\" classname=\"capacity_bench\"></testcase>\n",
+                "  <testcase name=\"{}\" classname=\"red-liner\"></testcase>\n",
                 esc(&r.name)
             ));
         } else {
@@ -215,7 +215,7 @@ pub fn write_junit(path: &Path, slos: &[SloResult], elapsed: Duration) -> std::i
                 r.name, r.target, r.observed
             ));
             xml.push_str(&format!(
-                "  <testcase name=\"{}\" classname=\"capacity_bench\">\n    <failure message=\"{msg}\"></failure>\n  </testcase>\n",
+                "  <testcase name=\"{}\" classname=\"red-liner\">\n    <failure message=\"{msg}\"></failure>\n  </testcase>\n",
                 esc(&r.name)
             ));
         }

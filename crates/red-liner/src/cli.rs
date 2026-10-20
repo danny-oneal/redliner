@@ -11,7 +11,7 @@ use crate::config::{Config, ConfigDuration};
 #[command(name = "red-liner", version)]
 pub struct Args {
     /// Scenario config file (YAML).
-    #[arg(long, default_value = "capacity_bench.yaml")]
+    #[arg(long, default_value = "red-liner.yaml")]
     pub config: PathBuf,
     /// Override target.url.
     #[arg(long)]

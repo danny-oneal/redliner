@@ -3,7 +3,13 @@ name = "red-liner"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-description = "Red Liner load-testing tool"
+description = "SLO-driven HTTP/GraphQL load testing with pacing profiles, data pools, and CI-gating reports"
+license = "MIT"
+repository = "https://github.com/danny-oneal/red-liner"
+homepage = "https://github.com/danny-oneal/red-liner"
+readme = "../../README.md"
+keywords = ["load-testing", "benchmark", "graphql", "slo", "http"]
+categories = ["command-line-utilities", "development-tools::testing"]
 
 [[bin]]
 name = "red-liner"

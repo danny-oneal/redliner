@@ -1,8 +1,6 @@
-capacity_bench
-reports/
-trace.out
-*.test
-
-# Rust
+# Rust build output
 /target
 **/target/
+
+# Run report output
+reports/

@@ -3,7 +3,11 @@ name = "volley"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-description = "HTTP load-generation engine for Red Liner"
+description = "Async paced HTTP load-generation engine (the attack core behind Red Liner)"
+license = "MIT"
+repository = "https://github.com/danny-oneal/red-liner"
+keywords = ["load-testing", "http", "benchmark", "async", "tokio"]
+categories = ["network-programming", "development-tools::testing"]
 
 [dependencies]
 futures = "0.3.34"
