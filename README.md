@@ -1,68 +1,119 @@
-# capacity_bench
+# Red Liner
 
-Vegeta-powered capacity/stress harness driven by a declarative YAML scenario
-file. Speaks **GraphQL or REST**, fires a weighted mix of operations with
-variables drawn from data pools (static or harvested from the live service),
-paces load as constant / Poisson / ramp / stepped profiles, validates
+[![CI](https://github.com/danny-oneal/red-liner/actions/workflows/ci.yml/badge.svg)](https://github.com/danny-oneal/red-liner/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**SLO-driven HTTP load testing in Rust.** Red Liner fires a declarative,
+weighted mix of **GraphQL or REST** operations at a target, paces the load as
+a constant / Poisson / ramp / stepped profile, draws request values from data
+pools (static or **harvested from the live service** before the run), validates
 responses at the application layer, and **gates CI on SLOs** with a non-zero
-exit code.
+exit code. Every run leaves a timestamped report directory for audit and
+dashboards.
 
-## Layout
+It is a from-scratch Rust port of an internal Go/Vegeta harness, built as a
+Cargo workspace: a reusable async load engine (`volley`) and the configurable
+binary (`red-liner`).
 
+## Features
+
+- **One YAML file** describes the target, auth, load profile, operation mix,
+  data pools, checks, SLOs, and reports. Unknown keys are rejected, so typos
+  fail fast.
+- **GraphQL and REST** behind one encoder seam — switch with `target.protocol`.
+- **Pacing profiles:** `constant`, `poisson` (seeded, self-correcting),
+  `ramp`, and `steps` (to find the throughput knee).
+- **Data pools & templating:** `{{pool}}` placeholders in paths, bodies, and
+  GraphQL variables, sampled from `list` / `range` / `file` pools or values
+  **harvested** from the live service by JSON path.
+- **App-layer checks:** reclassify a `200`-with-GraphQL-`errors` or an
+  out-of-set status as a failure, so the success rate tells the truth.
+- **SLO gate:** success rate, p50/p95/p99, and throughput thresholds decide the
+  process exit code.
+- **Reports:** per-run `reports/<timestamp>/` with summaries, a latency
+  histogram, `metrics.json`, per-operation / per-phase breakdowns, a JUnit file
+  for CI, a raw `results.jsonl` stream, and a full run manifest.
+- **Reproducible:** a fixed `load.seed` reproduces pacing and sampling exactly.
+
+## Install
+
+Red Liner needs a **Rust toolchain ≥ 1.88** ([rustup](https://rustup.rs)).
+
+```bash
+# From a local checkout (also: `make install`):
+cargo install --path crates/red-liner --locked
+
+# Or straight from GitHub:
+cargo install --git https://github.com/danny-oneal/red-liner red-liner --locked
 ```
-capacity_bench/
-  main.go        orchestration: config → pools → phases → reports → SLO gate
-  config.go      YAML schema, defaults, validation, flag overrides
-  protocol.go    encoder interface + GraphQL/REST implementations
-  targeter.go    weighted scenario mix + vegeta.Targeter
-  pacer.go       PoissonPacer + load-profile → pacer factory
-  data.go        pools (list/file/range), JSON-path extraction, templating
-  bootstrap.go   harvest client (seeds pools from the live service)
-  checks.go      app-layer response validation (status set, GraphQL errors)
-  slo.go         SLO evaluation + JUnit XML
-  report.go      collector, per-op/per-phase summaries, run manifest
-  configs/       example scenario files (graphql-catalog, rest-example)
-  configs/queries/  external .graphql documents referenced via query_file
-```
+
+Both drop a `red-liner` binary in `~/.cargo/bin`. To run from source without
+installing, use `cargo run -p red-liner -- <args>`.
 
 ## Quick start
 
 ```bash
-make build
-
-# GraphQL catalog server (reproduces the original harness behavior)
-./capacity_bench -config configs/graphql-catalog.yaml
+# GraphQL catalog server
+red-liner --config configs/graphql-catalog.yaml
 
 # REST API, stepped rates to find the throughput knee
-./capacity_bench -config configs/rest-example.yaml
+red-liner --config configs/rest-example.yaml
 
-# CI: check a config without firing anything
-./capacity_bench -config configs/rest-example.yaml -validate
+# CI: validate a config without firing any traffic
+red-liner --config configs/rest-example.yaml --validate
+
+# Override a few knobs without editing the file
+red-liner --config configs/rest-example.yaml --rate 500 --duration 2m
 ```
 
-Exit codes: `0` run passed, `1` SLO violated, `2` config/runtime error.
+**Exit codes:** `0` run passed · `1` an SLO was violated · `2` config or
+runtime error.
 
-## Flags (overrides only — config is the source of truth)
+## How it works
 
-| flag        | meaning                              |
-| ----------- | ------------------------------------ |
-| `-config`   | scenario file (default `capacity_bench.yaml`) |
-| `-url`      | override `target.url`                |
-| `-rate`     | override `load.rate`                 |
-| `-duration` | override `load.duration`             |
-| `-warmup`   | override `load.warmup`               |
-| `-seed`     | override `load.seed`                 |
-| `-out`      | override `report.dir`                |
-| `-validate` | validate config and exit             |
+```
+config (YAML) ─▶ build pools ─▶ harvest probe ─▶ weighted mix + encoder
+                                                        │
+                                                        ▼
+            per-phase paced attack (volley engine) ─▶ app-layer checks
+                                                        │
+                                                        ▼
+                         collector ─▶ SLO gate ─▶ report dir + exit code
+```
 
-## Scenario file
+The workspace has two crates:
+
+| crate        | role |
+| ------------ | ---- |
+| **`volley`** | protocol-agnostic async load engine: `Target`/`AttackResult`/`Metrics`, the `Pacer` and `Targeter` traits, pacers, and the tokio `Attacker` that fires at a paced rate over reqwest. Depends on nothing in `red-liner`. |
+| **`red-liner`** | the binary: YAML config model + validation, CLI overrides, GraphQL/REST encoders, data pools + harvest, app-layer checks, SLO gate, and the report directory. |
+
+## CLI
+
+The config file is the source of truth; flags override only what you set.
+
+| flag          | overrides      | notes                                   |
+| ------------- | -------------- | --------------------------------------- |
+| `--config`    | —              | scenario file (default `red-liner.yaml`) |
+| `--url`       | `target.url`   |                                         |
+| `--rate`      | `load.rate`    | requests per second                     |
+| `--duration`  | `load.duration`| Go-style duration, e.g. `30s`, `2m`     |
+| `--warmup`    | `load.warmup`  | Go-style duration                       |
+| `--seed`      | `load.seed`    | fix for a reproducible run              |
+| `--out`       | `report.dir`   |                                         |
+| `--validate`  | —              | validate the config and exit `0`        |
+
+## Configuration
+
+A minimal config is a target URL and one scenario; everything else has a
+default. See **[docs/configuration.md](docs/configuration.md)** for the full
+schema, and [`configs/`](configs/) for worked GraphQL and REST examples.
 
 ```yaml
 target:
   url: http://localhost:8080/query   # full endpoint (graphql) or base URL (rest)
   protocol: graphql                  # graphql | rest
   timeout: 10s
-  headers: { X-Team: platform }
   auth:                              # credentials come from env, never the file
     type: bearer                     # none | bearer | basic | header
     token_env: BENCH_TOKEN
@@ -72,104 +123,77 @@ load:
   rate: 200
   duration: 30s
   warmup: 3s                         # uniform at 10% rate, not measured
-  # ramp:  { from: 50, to: 500 }     # profile: ramp
-  # steps: [ { rate: 100, duration: 30s }, ... ]  # profile: steps
   seed: 0                            # 0 = time-based; set for reproducible runs
 
 data:
-  pools:                             # named value sources for {{placeholders}}
-    ids:  { type: range, min: 1, max: 1000 }
-    skus: { type: file, path: skus.txt }
-    cc:   { type: list, values: [US, CA] }
-  harvest:                           # seed pools from the live service
-    - request: { query: "query { ... }" }        # graphql
-    # - request: { method: GET, path: /products } # rest
-      extract:
-        skus: data.country.menus[].categories[].products[].sellableItems[].sku
+  pools:
+    ids: { type: range, min: 1, max: 1000 }
+  harvest:                           # seed pools from the live service first
+    - request: { query: "query{ products{ id } }" }
+      extract: { ids: data.products[].id }
 
-scenarios:                           # weighted mix, drawn per hit
+scenarios:                           # weighted mix, one drawn per request
   - name: GetProduct
-    weight: 50
+    weight: 1
     request:
-      method: GET                    # rest fields: method/path/body/headers
-      path: /products/{{ids}}
-  - name: ProductQuery
-    weight: 50
-    request:
-      query: "query($id:Int!){ product(id:$id){ name } }"   # graphql fields
-      variables: { id: "{{ids}}" }   # whole-placeholder keeps native type
-  - name: DeepQuery
-    weight: 10
-    request:
-      query_file: queries/deep.graphql   # external .graphql for big selections
-      variables: { id: "{{ids}}" }
+      query: "query($id:Int!){ product(id:$id){ name } }"
+      variables: { id: "{{ids}}" }   # a whole-placeholder keeps its native type
 
 checks:
-  status: [200, 201]                 # allowed HTTP statuses (rest)
-  graphql_errors: true               # 200-with-errors counts as failure
+  graphql_errors: true               # a 200 carrying `errors` counts as a failure
 
 slos:                                # any violation → exit 1
   success_rate: 0.995
   p95: 250ms
-  p99: 800ms
-  throughput_min: 190
 
 report:
-  dir: reports                       # runs land in reports/<timestamp>/
-  junit: true                        # junit.xml for CI test ingestion
+  dir: reports
+  junit: true
 ```
 
-Templating: `{{pool}}` anywhere in paths, bodies, or GraphQL variables. A
-variable that is exactly one placeholder keeps the sampled value's native
-type (`id: "{{ids}}"` stays an `Int`); embedded placeholders interpolate as
-strings.
+**Templating:** `{{pool}}` works anywhere in a path, body, or GraphQL
+variable. A value that is *exactly* one placeholder keeps the sampled value's
+native type (`id: "{{ids}}"` stays an integer); an embedded placeholder
+(`/u/{{ids}}/x`) interpolates as a string. All file paths (`query_file`, file
+pools) resolve relative to the config file, so a config behaves the same
+locally and in CI.
 
-Queries: `query` (inline) and `query_file` (external `.graphql` document)
-are mutually exclusive; use files for deeply nested selections. All file
-paths — `query_file` and file pools — resolve relative to the config file,
-not the working directory, so configs behave the same locally and in CI.
+## Reports
 
-## Outputs
+Each run writes `reports/<UTC timestamp>/` and refreshes a `latest` symlink:
 
-Each run writes `reports/<UTC timestamp>/` (plus a `latest` symlink):
-
-- `text.txt`, `histogram.txt`, `metrics.json` — vegeta reports
-- `per_operation.json` — p50/p95/p99 + success per scenario
-- `per_phase.json` — per-step metrics (steps profile) for knee-finding
-- `run_manifest.json` — full config, seed, SLO verdicts; the audit trail
-- `junit.xml` — SLO results as test cases for CI
-- `results.bin` — raw vegeta stream, replayable: `vegeta report -type=plot results.bin`
+| file                  | contents |
+| --------------------- | -------- |
+| `text.txt`            | human-readable overall summary |
+| `histogram.txt`       | latency histogram over log-spaced buckets |
+| `metrics.json`        | overall metrics (rate, throughput, success, latencies, status codes) |
+| `per_operation.json`  | requests / success / p50·p95·p99 per scenario |
+| `per_phase.json`      | per-phase metrics (written when more than one phase ran) |
+| `run_manifest.json`   | full config, seed, and SLO verdicts — the audit trail |
+| `junit.xml`           | SLO results as test cases (when `report.junit: true`) |
+| `results.jsonl`       | raw per-request stream, one JSON object per line (when `report.keep_raw: true`) |
 
 ## CI usage
 
 ```yaml
-# e.g. GitHub Actions
-- run: ./capacity_bench -config configs/rest-example.yaml
-# non-zero exit fails the job on SLO violation; junit.xml feeds test reports
+# GitHub Actions
+- run: red-liner --config configs/rest-example.yaml
+  # a non-zero exit fails the job on an SLO violation;
+  # upload reports/latest/junit.xml to surface SLOs as test results
 ```
 
-## Design patterns
+## Development
 
-- **Strategy** — pacers (`constant|poisson|ramp|steps`) behind `vegeta.Pacer`;
-  protocol encoders (`graphql|rest`) behind the `encoder` interface; pools
-  (`list|file|range|harvested`) behind `Pool`.
-- **Factory Method** — `newEncoder` and `buildPhases` map config onto strategies.
-- **Adapter** — encoders adapt (scenario, sampled vars) onto `vegeta.Target`.
-- **Decorator/interceptor** — `checker` reclassifies results between attacker
-  and collector without touching either.
-- **Bootstrap/probe** — harvest requests discover live IDs so report errors
-  are real server errors, not synthetic 404s.
-- **Self-correcting feedback** — `PoissonPacer` fires immediately when the
-  observed hit count falls behind `rate × elapsed`.
-- **Configuration object + overrides** — one validated `Config`; flags win
-  only when explicitly set.
+```bash
+make test     # cargo test --workspace
+make lint     # cargo clippy --workspace --all-targets -- -D warnings
+make build    # release binary
+make run CONFIG=configs/rest-example.yaml
+```
 
-## Troubleshooting
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the workflow and conventions,
+and **[CHANGELOG.md](CHANGELOG.md)** for release notes.
 
-- **`harvest: ... connection refused`** — service isn't up at `target.url`.
-- **`pool "x": path ... matched nothing`** — the harvest extract path doesn't
-  match the response shape; check it against the real JSON.
-- **Actual rate well below target** — server saturation; check
-  `per_phase.json` and non-2xx counts in `metrics.json`.
-- **Success < 100% with all-200 statuses** — GraphQL resolver errors; see the
-  `check: graphql errors` entries in the error list.
+## License
+
+[MIT](LICENSE) © Danny O'Neal
