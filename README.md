@@ -1,7 +1,7 @@
-# Red Liner
+# Redliner
 
 ```
-    R E D   L I N E R
+    R E D L I N E R
     ██████████████████████████████████▓▓▓▓▓▓▓◉
     SLO-driven HTTP load testing — push it to the red line
 ```
@@ -9,7 +9,7 @@
 [![CI](https://github.com/danny-oneal/red-liner/actions/workflows/ci.yml/badge.svg)](https://github.com/danny-oneal/red-liner/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**SLO-driven HTTP load testing in Rust.** Red Liner fires a declarative,
+**SLO-driven HTTP load testing in Rust.** Redliner fires a declarative,
 weighted mix of **GraphQL or REST** operations at a target, paces the load as
 a constant / Poisson / ramp / stepped profile, draws request values from data
 pools (static or **harvested from the live service** before the run), validates
@@ -19,7 +19,7 @@ dashboards.
 
 It is a from-scratch Rust port of an internal Go/Vegeta harness, built as a
 Cargo workspace: a reusable async load engine (`volley`) and the configurable
-binary (`red-liner`).
+binary (`redliner`).
 
 ## Features
 
@@ -43,33 +43,33 @@ binary (`red-liner`).
 
 ## Install
 
-Red Liner needs a **Rust toolchain ≥ 1.88** ([rustup](https://rustup.rs)).
+Redliner needs a **Rust toolchain ≥ 1.88** ([rustup](https://rustup.rs)).
 
 ```bash
 # From a local checkout (also: `make install`):
-cargo install --path crates/red-liner --locked
+cargo install --path crates/redliner --locked
 
 # Or straight from GitHub:
-cargo install --git https://github.com/danny-oneal/red-liner red-liner --locked
+cargo install --git https://github.com/danny-oneal/red-liner redliner --locked
 ```
 
-Both drop a `red-liner` binary in `~/.cargo/bin`. To run from source without
-installing, use `cargo run -p red-liner -- <args>`.
+Both drop a `redliner` binary in `~/.cargo/bin`. To run from source without
+installing, use `cargo run -p redliner -- <args>`.
 
 ## Quick start
 
 ```bash
 # GraphQL catalog server
-red-liner --config configs/graphql-catalog.yaml
+redliner --config configs/graphql-catalog.yaml
 
 # REST API, stepped rates to find the throughput knee
-red-liner --config configs/rest-example.yaml
+redliner --config configs/rest-example.yaml
 
 # CI: validate a config without firing any traffic
-red-liner --config configs/rest-example.yaml --validate
+redliner --config configs/rest-example.yaml --validate
 
 # Override a few knobs without editing the file
-red-liner --config configs/rest-example.yaml --rate 500 --duration 2m
+redliner --config configs/rest-example.yaml --rate 500 --duration 2m
 ```
 
 **Exit codes:** `0` run passed · `1` an SLO was violated · `2` config or
@@ -91,8 +91,8 @@ The workspace has two crates:
 
 | crate        | role |
 | ------------ | ---- |
-| **`volley`** | protocol-agnostic async load engine: `Target`/`AttackResult`/`Metrics`, the `Pacer` and `Targeter` traits, pacers, and the tokio `Attacker` that fires at a paced rate over reqwest. Depends on nothing in `red-liner`. |
-| **`red-liner`** | the binary: YAML config model + validation, CLI overrides, GraphQL/REST encoders, data pools + harvest, app-layer checks, SLO gate, and the report directory. |
+| **`volley`** | protocol-agnostic async load engine: `Target`/`AttackResult`/`Metrics`, the `Pacer` and `Targeter` traits, pacers, and the tokio `Attacker` that fires at a paced rate over reqwest. Depends on nothing in `redliner`. |
+| **`redliner`** | the binary: YAML config model + validation, CLI overrides, GraphQL/REST encoders, data pools + harvest, app-layer checks, SLO gate, and the report directory. |
 
 ## CLI
 
@@ -100,7 +100,7 @@ The config file is the source of truth; flags override only what you set.
 
 | flag          | overrides      | notes                                   |
 | ------------- | -------------- | --------------------------------------- |
-| `--config`    | —              | scenario file (default `red-liner.yaml`) |
+| `--config`    | —              | scenario file (default `redliner.yaml`) |
 | `--url`       | `target.url`   |                                         |
 | `--rate`      | `load.rate`    | requests per second                     |
 | `--duration`  | `load.duration`| Go-style duration, e.g. `30s`, `2m`     |
@@ -179,11 +179,14 @@ Each run writes `reports/<UTC timestamp>/` and refreshes a `latest` symlink:
 | `junit.xml`           | SLO results as test cases (when `report.junit: true`) |
 | `results.jsonl`       | raw per-request stream, one JSON object per line (when `report.keep_raw: true`) |
 
+When a run violates an SLO, the summary also prints a redline bar so a failure
+is impossible to miss in a scrollback or CI log.
+
 ## CI usage
 
 ```yaml
 # GitHub Actions
-- run: red-liner --config configs/rest-example.yaml
+- run: redliner --config configs/rest-example.yaml
   # a non-zero exit fails the job on an SLO violation;
   # upload reports/latest/junit.xml to surface SLOs as test results
 ```

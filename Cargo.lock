@@ -950,7 +950,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "red-liner"
+name = "redliner"
 version = "0.1.0"
 dependencies = [
  "anyhow",

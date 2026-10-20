@@ -1,4 +1,4 @@
-//! Volley: the load-generation engine behind Red Liner.
+//! Volley: the load-generation engine behind Redliner.
 
 pub mod attacker;
 pub mod error;
