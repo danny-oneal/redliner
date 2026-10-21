@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Production-log replay** — replay a structured production log (JSON lines
+  or HAR) instead of a synthetic profile. Entries are matched to scenarios by
+  per-scenario `match` rules (GraphQL `operation`; REST `method` + a `*` / `**`
+  path glob) and fired in the log's order and at its inter-arrival pace through
+  the existing attacker, checks, SLOs, and reports. Switch on with a `replay`
+  block or `--replay <log>`; `replay.speed` / `--speed` compress time,
+  `replay.copies` / `--copies` multiply volume over the same duration,
+  `replay.window` slices the log, and `replay.on_unmatched: fail` / `--strict`
+  aborts on unmatched entries. Request values still come from data pools.
+  Malformed log lines are skipped and counted, a replay summary is printed and
+  stored in `run_manifest.json`, and every parse/match failure is exit `2`
+  before any request is fired. Epoch timestamp units (s/ms/µs/ns) are inferred
+  by magnitude; the post-`speed` span is capped at 24h and the schedule at
+  10,000,000 hits (both exit `2`); and a replay that falls behind records
+  `fired`/`dropped`, fails a `replay_delivery` check (also in `junit.xml`),
+  warns, and exits `1`. See `configs/replay-example.yaml`.
+
+### Changed
+- `volley::Targeter::target` now takes the hit index `seq: u64` (breaking for
+  external `Targeter` implementations).
+- CLI overrides are now applied before defaults and validation, so overridden
+  values are validated, `--seed 0` derives a wall-clock seed, and `--rate 0` /
+  `--duration 0s` fall back to defaults.
+
 ## [0.1.0] - 2026-10-20
 
 Initial release — a from-scratch Rust port of an internal Go/Vegeta harness.

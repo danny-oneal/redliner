@@ -9,11 +9,14 @@ use volley::{Attacker, AttackerConfig, ConstantPacer, Metrics, Pacer};
 
 use crate::checks::Checker;
 use crate::cli::Args;
-use crate::config::{load_config_file, Config};
+use crate::config::{load_config_file_with, Config};
 use crate::data;
 use crate::encode::{new_encoder, MixTargeter};
 use crate::mix::WeightedMix;
-use crate::phases::build_phases;
+use crate::phases::{build_phases, Phase};
+use crate::replay::schedule::Schedule;
+use crate::replay::targeter::{SchedulePacer, ScheduleTargeter};
+use crate::replay::{build_replay, ReplaySummary};
 use crate::report::{self, Collector, RunManifest};
 use crate::slo::{self, fmt_dur, SloResult};
 
@@ -65,32 +68,67 @@ pub async fn run(args: Args) -> Exit {
 }
 
 async fn run_inner(args: Args) -> anyhow::Result<Exit> {
-    let mut cfg = load_config_file(&args.config)?;
-    args.apply_overrides(&mut cfg);
+    let cfg = load_config_file_with(&args.config, |c| args.apply_overrides(c))?;
+    // Replay knobs without a replay target are one clear error, not a cascade.
+    args.check_replay_knobs(cfg.replay.is_some())
+        .map_err(anyhow::Error::msg)?;
+    // Replay reads and schedules the whole log up front, so a bad log fails
+    // before any report dir or request exists.
+    let mut replay = cfg
+        .replay
+        .is_some()
+        .then(|| build_replay(&cfg))
+        .transpose()?;
 
     if args.validate {
         let proto = serde_json::to_value(cfg.target.protocol)?;
+        let mode = match &replay {
+            Some(r) => format!("replay {}", r.summary.source),
+            None => format!("profile {}", cfg.load.profile),
+        };
         println!(
-            "{}: valid ({}, {} scenarios, profile {})",
+            "{}: valid ({}, {} scenarios, {mode})",
             args.config.display(),
             proto.as_str().unwrap_or("?"),
             cfg.scenarios.len(),
-            cfg.load.profile
         );
+        if let Some(r) = &replay {
+            print!("{}", r.summary.render());
+        }
         return Ok(Exit::Ok);
     }
 
-    eprintln!(
-        "target={} profile={} seed={}",
-        cfg.target.url, cfg.load.profile, cfg.load.seed
-    );
+    match &replay {
+        Some(r) => {
+            let s = &r.summary;
+            eprintln!(
+                "target={} replay={} hits={} span={} speed={} copies={} seed={}",
+                cfg.target.url, s.source, s.hits, s.span, s.speed, s.copies, cfg.load.seed
+            );
+        }
+        None => eprintln!(
+            "target={} profile={} seed={}",
+            cfg.target.url, cfg.load.profile, cfg.load.seed
+        ),
+    }
 
     let enc = new_encoder(&cfg)?;
-    let mix = WeightedMix::new(cfg.scenarios.clone());
     let mut pools = data::build_pools(&cfg.data)?;
     data::harvest::run_harvest(&cfg, &mut pools).await?;
-    let targeter = Arc::new(MixTargeter::new(enc, mix, pools, cfg.load.seed as u64));
-    let phases = build_phases(&cfg.load)?;
+    let seed = cfg.load.seed as u64;
+    let plan = match &replay {
+        Some(r) => {
+            let schedule = r.schedule.clone();
+            let t =
+                ScheduleTargeter::new(enc, cfg.scenarios.clone(), pools, schedule.clone(), seed);
+            Plan::Replay(Arc::new(t), schedule)
+        }
+        None => {
+            let mix = WeightedMix::new(cfg.scenarios.clone());
+            let t = MixTargeter::new(enc, mix, pools, seed);
+            Plan::Profile(Arc::new(t), build_phases(&cfg.load)?)
+        }
+    };
 
     // Report scaffolding: create the run dir and write an initial manifest
     // before any traffic, so an aborted run still leaves a trail.
@@ -106,25 +144,15 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
         requests: None,
         slo_results: Vec::new(),
         passed: None,
+        replay: replay.as_ref().map(|r| r.summary.clone()),
     };
     report::write_manifest(&report_dir, &manifest)
         .map_err(|e| anyhow::anyhow!("write manifest: {e}"))?;
 
     let start = Instant::now();
 
-    // Warmup: uniform, unmeasured, 10% of the first phase's rate.
-    let warmup = cfg.load.warmup.as_std();
-    if !warmup.is_zero() {
-        let first_rate = phases.first().map_or(0.0, |p| p.rate);
-        let freq = ((first_rate / 10.0) as u64).max(1);
-        let pacer = Arc::new(ConstantPacer { freq, per: Duration::from_secs(1) });
-        let attacker = new_attacker(&cfg)?;
-        let mut rx = attacker.attack(targeter.clone(), pacer, warmup, "warmup".into());
-        while rx.recv().await.is_some() {}
-    }
-
-    // One fresh attacker per phase; results flow through the checker (which
-    // reclassifies app-layer failures) into the collector.
+    // Results flow through the checker (which reclassifies app-layer
+    // failures) into the collector.
     let checker = Checker::new(&cfg.checks);
     let raw = cfg
         .report
@@ -133,9 +161,103 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
         .then(|| report_dir.join("results.jsonl"));
     let mut collector =
         Collector::new(raw.as_deref()).map_err(|e| anyhow::anyhow!("open results.jsonl: {e}"))?;
-    for ph in &phases {
+    let fired = match plan {
+        Plan::Profile(t, phases) => {
+            attack_profile(&cfg, t, &phases, &checker, &mut collector).await?;
+            None
+        }
+        Plan::Replay(t, schedule) => {
+            Some(attack_replay(&cfg, t, schedule, &checker, &mut collector).await?)
+        }
+    };
+    collector.close();
+    let elapsed = start.elapsed();
+
+    let mut results = slo::evaluate(&cfg.slos, collector.overall());
+    let mut passed = slo::passed(&results);
+
+    // A replay that could not keep up silently dropped its tail, which would
+    // otherwise let a short-changed run pass the SLO gate. Record the shortfall
+    // and fail the run regardless of whether SLOs are enforced. The delivery
+    // check joins the SLO results so JUnit and the summary show it too.
+    let mut fell_behind = false;
+    if let (Some(r), Some(fired)) = (replay.as_mut(), fired) {
+        let hits = r.summary.hits;
+        let dropped = hits.saturating_sub(fired);
+        r.summary.fired = Some(fired);
+        r.summary.dropped = Some(dropped);
+        results.push(SloResult {
+            name: "replay_delivery".into(),
+            target: format!("{hits} hits"),
+            observed: format!("{fired} fired"),
+            passed: dropped == 0,
+        });
+        if dropped > 0 {
+            eprintln!(
+                "warning: replay fell behind: fired {fired} of {hits} scheduled hits \
+                 ({dropped} dropped); raise load.max_workers if the load generator, \
+                 not the target, is the bottleneck"
+            );
+            fell_behind = true;
+            passed = false;
+        }
+    }
+
+    manifest.finished_at = Some(report::utc_rfc3339(SystemTime::now()));
+    manifest.requests = Some(collector.overall().requests);
+    manifest.slo_results = results.clone();
+    manifest.passed = Some(passed);
+    manifest.replay = replay.as_ref().map(|r| r.summary.clone());
+    report::write_reports(&report_dir, &collector, &manifest)
+        .map_err(|e| anyhow::anyhow!("write reports: {e}"))?;
+    if cfg.report.junit {
+        report::write_junit(&report_dir.join("junit.xml"), &results, elapsed)
+            .map_err(|e| anyhow::anyhow!("write junit: {e}"))?;
+    }
+
+    print_summary(
+        collector.overall(),
+        collector.per_op(),
+        replay.as_ref().map(|r| &r.summary),
+        &results,
+        elapsed,
+        &report_dir,
+    );
+
+    if fell_behind || (cfg.slos.enforced() && !passed) {
+        return Ok(Exit::SloFailed);
+    }
+    Ok(Exit::Ok)
+}
+
+/// What the attack section fires: weighted phases, or a replayed log.
+enum Plan {
+    Profile(Arc<MixTargeter>, Vec<Phase>),
+    Replay(Arc<ScheduleTargeter>, Arc<Schedule>),
+}
+
+/// Warmup, then one fresh attacker per phase.
+async fn attack_profile(
+    cfg: &Config,
+    targeter: Arc<MixTargeter>,
+    phases: &[Phase],
+    checker: &Checker,
+    collector: &mut Collector,
+) -> anyhow::Result<()> {
+    // Warmup: uniform, unmeasured, 10% of the first phase's rate.
+    let warmup = cfg.load.warmup.as_std();
+    if !warmup.is_zero() {
+        let first_rate = phases.first().map_or(0.0, |p| p.rate);
+        let freq = ((first_rate / 10.0) as u64).max(1);
+        let pacer = Arc::new(ConstantPacer { freq, per: Duration::from_secs(1) });
+        let attacker = new_attacker(cfg)?;
+        let mut rx = attacker.attack(targeter.clone(), pacer, warmup, "warmup".into());
+        while rx.recv().await.is_some() {}
+    }
+
+    for ph in phases {
         eprintln!("attack: {} for {:?} (nominal {} rps)", ph.name, ph.duration, ph.rate);
-        let attacker = new_attacker(&cfg)?;
+        let attacker = new_attacker(cfg)?;
         let mut rx = attacker.attack(
             targeter.clone(),
             Arc::new(DynPacer(ph.pacer.clone())),
@@ -148,34 +270,38 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
             collector.add(&r, &ph.name, op.as_deref());
         }
     }
-    collector.close();
-    let elapsed = start.elapsed();
+    Ok(())
+}
 
-    let results = slo::evaluate(&cfg.slos, collector.overall());
-    let passed = slo::passed(&results);
-
-    manifest.finished_at = Some(report::utc_rfc3339(SystemTime::now()));
-    manifest.requests = Some(collector.overall().requests);
-    manifest.slo_results = results.clone();
-    manifest.passed = Some(passed);
-    report::write_reports(&report_dir, &collector, &manifest)
-        .map_err(|e| anyhow::anyhow!("write reports: {e}"))?;
-    if cfg.report.junit {
-        report::write_junit(&report_dir.join("junit.xml"), &results, elapsed)
-            .map_err(|e| anyhow::anyhow!("write junit: {e}"))?;
+/// One attacker that fires each scheduled hit at its offset, attributing
+/// every result to the scenario its log event matched.
+/// Returns the number of hits actually fired (results received).
+async fn attack_replay(
+    cfg: &Config,
+    targeter: Arc<ScheduleTargeter>,
+    schedule: Arc<Schedule>,
+    checker: &Checker,
+    collector: &mut Collector,
+) -> anyhow::Result<u64> {
+    let attacker = new_attacker(cfg)?;
+    // Give a slow-but-responding target room to answer the last hits: one
+    // request timeout past the last offset, plus a drain second.
+    let duration = schedule.span() + cfg.target.timeout.as_std() + Duration::from_secs(1);
+    let pacer = Arc::new(SchedulePacer::new(schedule));
+    let mut rx = attacker.attack(targeter.clone(), pacer, duration, "replay".into());
+    let mut fired = 0u64;
+    while let Some(mut r) = rx.recv().await {
+        checker.apply(&mut r);
+        collector.add(&r, "replay", targeter.operation(r.seq));
+        fired += 1;
     }
-
-    print_summary(collector.overall(), collector.per_op(), &results, elapsed, &report_dir);
-
-    if cfg.slos.enforced() && !passed {
-        return Ok(Exit::SloFailed);
-    }
-    Ok(Exit::Ok)
+    Ok(fired)
 }
 
 fn print_summary(
     m: &Metrics,
     per_op: &BTreeMap<String, Metrics>,
+    replay: Option<&ReplaySummary>,
     slos: &[SloResult],
     elapsed: Duration,
     report_dir: &Path,
@@ -200,6 +326,10 @@ fn print_summary(
                 s.name, s.requests, s.success * 100.0, s.p50, s.p95, s.p99
             );
         }
+    }
+
+    if let Some(r) = replay {
+        print!("\n{}", r.render());
     }
 
     if !m.errors.is_empty() {

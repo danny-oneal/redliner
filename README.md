@@ -39,6 +39,9 @@ binary (`redliner`).
 - **Reports:** per-run `reports/<timestamp>/` with summaries, a latency
   histogram, `metrics.json`, per-operation / per-phase breakdowns, a JUnit file
   for CI, a raw `results.jsonl` stream, and a full run manifest.
+- **Production-log replay:** feed a JSONL or HAR request log and Redliner fires
+  the matching scenarios in the log's order and at its pace, with `--speed` and
+  `--copies` to compress or amplify, still gated by the checks and SLOs.
 - **Reproducible:** a fixed `load.seed` reproduces pacing and sampling exactly.
 
 ## Install
@@ -70,6 +73,9 @@ redliner --config configs/rest-example.yaml --validate
 
 # Override a few knobs without editing the file
 redliner --config configs/rest-example.yaml --rate 500 --duration 2m
+
+# Replay a production log at 2x speed (see "Production-log replay" below)
+redliner --config configs/replay-example.yaml --replay prod.jsonl --speed 2
 ```
 
 **Exit codes:** `0` run passed · `1` an SLO was violated · `2` config or
@@ -108,6 +114,10 @@ The config file is the source of truth; flags override only what you set.
 | `--seed`      | `load.seed`    | fix for a reproducible run              |
 | `--out`       | `report.dir`   |                                         |
 | `--validate`  | —              | validate the config and exit `0`        |
+| `--replay`    | `replay.source`| replay a JSONL/HAR log instead of a load profile |
+| `--speed`     | `replay.speed` | replay time compression (needs replay)  |
+| `--copies`    | `replay.copies`| concurrent copies of the log (needs replay) |
+| `--strict`    | `replay.on_unmatched` | fail instead of skipping unmatched entries (needs replay) |
 
 ## Configuration
 
@@ -163,6 +173,36 @@ native type (`id: "{{ids}}"` stays an integer); an embedded placeholder
 (`/u/{{ids}}/x`) interpolates as a string. All file paths (`query_file`, file
 pools) resolve relative to the config file, so a config behaves the same
 locally and in CI.
+
+## Production-log replay
+
+Instead of a synthetic profile, replay what production actually saw. Give each
+scenario a `match` rule and point `replay.source` (or `--replay`) at a JSONL or
+HAR log; Redliner fires the matched operations in the log's order and at its
+inter-arrival pace. Request *values* still come from your data pools, not the
+log.
+
+```yaml
+replay:
+  source: prod.jsonl      # one JSON object per line: ts, method, path, operation
+  speed: 2.0              # 2x faster than recorded
+  copies: 3               # 3x the volume over the same duration
+
+scenarios:
+  - name: GetProduct
+    weight: 1                            # profile mode only; replay ignores it
+    match: { operation: GetProduct }     # REST: { method: GET, path: /products/* }
+    request:
+      query: "query GetProduct($id:Int!){ product(id:$id){ name } }"
+      variables: { id: "{{ids}}" }
+```
+
+`weight` is ignored in replay mode and `match` in profile mode, so one file
+serves both. Unmatched entries are skipped (or fail the run with `--strict`);
+malformed lines are skipped and counted. `redliner --validate` previews the
+match counts without firing traffic. See
+[docs/configuration.md](docs/configuration.md#replay) and
+[`configs/replay-example.yaml`](configs/replay-example.yaml).
 
 ## Reports
 

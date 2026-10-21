@@ -15,6 +15,7 @@ the field its protocol needs). Everything else has a default.
 version: 1        # optional, informational
 target:  { ... }
 load:    { ... }
+replay:  { ... }  # optional; switches the run to production-log replay
 data:    { ... }  # optional
 scenarios: [ ... ]
 checks:  { ... }  # optional
@@ -80,6 +81,159 @@ load:
     - { rate: 250, duration: 30s }
 ```
 
+## `replay`
+
+Optional. Instead of a synthetic profile, replay a structured production log:
+each log entry is matched to a scenario (see [`match`](#match)) and fired in
+the log's order and at its inter-arrival pace, through the same attacker,
+checks, SLOs, and reports as a profile run. The log decides *which operations
+fire, in what order, and when*; request **values** (ids, SKUs, search terms)
+still come from `data` pools (static or harvested), never from the log.
+
+Replay is on when a `replay` block is present or `--replay <log>` is passed.
+Without either, the run is a normal profile run and every `match` is ignored.
+
+| key            | type     | default     | notes |
+| -------------- | -------- | ----------- | ----- |
+| `source`       | string   | *required*  | the log file; a relative path resolves against the config file's directory (a relative `--replay` path resolves against the current directory) |
+| `format`       | enum     | inferred    | `json` \| `har`; inferred from the extension: `.har` is `har`, anything else is `json` (JSON lines) |
+| `window`       | object   | —           | `{ start, end }` RFC3339 timestamps; replay only entries in the half-open range `[start, end)`; `start` must be before `end` |
+| `speed`        | float    | `1.0`       | time compression: every gap is divided by `speed`, so `2.0` replays twice as fast. Must be > 0 |
+| `copies`       | int      | `1`         | amplification: overlay `copies` copies of the log (see below) |
+| `on_unmatched` | enum     | `skip`      | `skip` \| `fail`: what to do with entries no scenario matches |
+| `fields`       | object   | see below   | JSONL field mapping |
+
+```yaml
+replay:
+  source: logs/prod-2026-10-20.jsonl   # relative to this config file
+  speed: 2.0                           # 2x faster than recorded
+  copies: 3                            # 3x the recorded volume, same duration
+  on_unmatched: fail                   # equivalent to --strict
+  window:
+    start: "2026-10-20T14:00:00Z"
+    end:   "2026-10-20T15:00:00Z"
+  fields:                              # only needed when your log differs
+    ts: "@timestamp"
+    method: http.method
+    path: http.url
+    operation: graphql.operationName
+```
+
+**Timeline.** Pacing starts at the first *matched* entry (time zero) and keeps
+every later gap. Timestamps are never compared to the wall clock, so an old
+log replays immediately.
+
+**Amplification.** `speed` divides every offset. `copies` overlays N copies of
+the matched log in parallel: copy *k* is rotated by *k*·span/N inside the
+original span (offsets that run past the end wrap to the start). This
+multiplies *total* and *average* volume by N over the *same* duration, but
+because the copies are staggered rather than stacked, the busiest instants are
+spread out: the **peak rate is not multiplied**. The `peak` value in the replay
+summary reports the effective peak after this rotation. Use `speed` to compress
+time and `copies` to multiply average load; they compose. The schedule is
+capped at 10,000,000 total hits (after `copies`); a larger one is a config
+error (exit `2`), so narrow the window or lower `copies`.
+
+**`on_unmatched`.** Entries no scenario matches are counted and, by default,
+skipped. `fail` (or `--strict`) aborts the run with exit `2`, before any
+request, naming the most frequent unmatched entries.
+
+### JSONL logs
+
+One JSON object per line; blank lines are ignored. `replay.fields` gives the
+dot path of each field in the object (same syntax as harvest `extract`:
+`a.b.c`, with `[]` to fan out an array, using the first value found).
+
+| `fields` key | default     | required | meaning |
+| ------------ | ----------- | -------- | ------- |
+| `ts`         | `ts`        | yes      | when the request happened. An RFC3339 string (`"2026-10-20T14:00:00.250Z"`, any UTC offset) or an epoch number whose **unit is inferred from magnitude**: `>= 1e17` is nanoseconds, `>= 1e14` microseconds, `>= 1e11` milliseconds, otherwise seconds (fractions allowed: `1760968800.25`) |
+| `method`     | `method`    | yes      | HTTP method (case-insensitive) |
+| `path`       | `path`      | yes      | request path or URL; the scheme, host, query string, and fragment are stripped, and the rest must start with `/` |
+| `operation`  | `operation` | no       | GraphQL operation name; absent or non-string means "no operation" |
+
+Extra fields are ignored. Replay does not use the log's bodies, headers, or
+status codes. For a GraphQL log, `method` and `path` are still required on
+every line even though matching uses only `operation`.
+
+A line that is not valid JSON, is not an object, or lacks a required field
+(or has an unusable timestamp or path) is **skipped and counted** as
+malformed; the replay summary shows the count and the first three reasons.
+Entries are stably sorted by time, so out-of-order logs are fine.
+
+### HAR logs
+
+`format: har` (or a `.har` file) reads a HAR 1.2 export: `log.entries[]`, each
+using `startedDateTime` (RFC3339), `request.method`, and `request.url`. For
+GraphQL, the operation is `operationName` in the JSON body at
+`request.postData.text`, when present. `replay.fields` is ignored for HAR. A
+document without `log.entries` fails the run; a bad individual entry is
+counted as malformed like a bad JSONL line. In error and malformed messages,
+"line N" for a HAR log is the 1-based index of the entry in `log.entries`, not
+a physical file line.
+
+### Validation and what combines with replay
+
+Replay needs at least one scenario with a `match`. Every parse, match, and
+schedule failure is exit `2` and happens **before any request is fired**.
+The run also exits `2` when nothing is left to send (every entry malformed,
+outside the window, or unmatched); the error lists the counts. The effective
+span after `speed` must be at most 24h — a larger one (usually a wrong
+timestamp unit or an outlier) is also exit `2`, so check the units, narrow
+`replay.window`, or raise `--speed`.
+
+Replay paces from the log, so `load.profile`, `rate`, `duration`, `warmup`,
+`ramp`, and `steps` are **rejected** when replay is on (the error names the
+field); the `--rate`, `--duration`, and `--warmup` flags map onto those fields
+and are rejected the same way. `load.workers`, `load.max_workers`, and
+`load.seed` still apply: the same config, log, and `seed` give the same
+schedule and the same request values for every request, regardless of
+concurrency.
+
+The `--speed`, `--copies`, and `--strict` flags only tune an existing replay
+run; passing any of them without `--replay <log>` or a `replay` block in the
+config is a single error (exit `2`): `--speed, --copies and --strict need
+--replay <log> or a replay block in the config`.
+
+**Keeping up.** Replay fires at the log's pace through at most `load.max_workers`
+concurrent requests. If the target (or the load generator) cannot keep up, the
+run can reach its deadline with scheduled hits still unfired. Those dropped hits
+are not silently ignored: the run prints a warning, records `fired`/`dropped` in
+the replay summary and `run_manifest.json`, fails the `replay_delivery` check
+(listed with the SLOs and in `junit.xml`), and **exits `1`** (even with no SLOs
+enforced). Raise `load.max_workers` if the load generator is the bottleneck.
+
+### Summary
+
+`--validate` reads and matches the log without firing anything and prints this
+block. A real run prints a one-line banner first (source, hits, span, speed,
+copies, seed), then repeats the block in the final summary and stores it under
+`replay` in `run_manifest.json`:
+
+```
+replay: configs/replay-sample.jsonl
+  events        : 20 parsed, 0 malformed, 0 outside window
+  matching      : 16 matched, 4 unmatched
+  hits          : 16
+  span          : 4.8s
+  speed         : 1x
+  copies        : 1
+  peak          : 4 rps
+  scenarios:
+    GetProduct               10
+    SearchProducts           6
+  unmatched (top):
+    GET /health (4)
+```
+
+`hits` is what will fire (after `copies`), `span` the replay duration (after
+`speed`), and `peak` the most hits in any one-second window. Matched counts
+are per scenario before `copies`. Results are attributed to scenarios by name
+in the per-operation report, as in a profile run. After every real run (not
+`--validate`) the block and manifest also carry a `fired` line
+(`fired : 14 of 16 (2 dropped)`), and the SLO results gain a
+`replay_delivery` check (also in `junit.xml`) that fails when any hit was
+dropped — see **Keeping up** above.
+
 ## `data`
 
 Optional. Named value pools feed `{{placeholder}}` templating; a harvest pass
@@ -127,11 +281,14 @@ data:
 ## `scenarios`
 
 A weighted mix; one scenario is drawn per request, proportional to `weight`.
+In [replay](#replay) mode `weight` is ignored and `match` picks the scenario
+instead.
 
 | key       | type   | notes |
 | --------- | ------ | ----- |
 | `name`    | string | used for per-operation report attribution |
-| `weight`  | float  | relative selection weight |
+| `weight`  | float  | relative selection weight; must be > 0 in profile mode, ignored in replay mode |
+| `match`   | object | replay mode only: which log entries this scenario serves (see [`match`](#match)); ignored in profile mode |
 | `request` | object | the per-protocol request (below) |
 
 ### `request` — GraphQL
@@ -154,6 +311,46 @@ A weighted mix; one scenario is drawn per request, proportional to `weight`.
 **Templating.** A value that is *exactly* one placeholder keeps the sampled
 value's native type (`id: "{{ids}}"` encodes as a JSON number); an embedded
 placeholder (`"/u/{{ids}}/x"`) interpolates as a string.
+
+### `match`
+
+Used only in replay mode; ignored otherwise, so one file can serve both
+modes. A scenario with no `match` never receives replayed traffic. The fields
+depend on `target.protocol`, and using the other protocol's fields is a
+validation error.
+
+| key         | protocol | notes |
+| ----------- | -------- | ----- |
+| `operation` | graphql  | required; the exact (case-sensitive) operation name |
+| `method`    | rest     | optional; case-insensitive; omitted matches any method |
+| `path`      | rest     | required; a glob that must start with `/` and match the whole logged path |
+
+Path globs are matched against the logged path with the query string removed.
+Everything is literal except `*`, which matches within one path segment (no
+`/`), and `**`, which matches across segments at any depth.
+
+| pattern            | matches                              | does not match |
+| ------------------ | ------------------------------------ | -------------- |
+| `/products/*`      | `/products/42`                       | `/products/42/reviews`, `/products` |
+| `/products/*/reviews` | `/products/42/reviews`            | `/products/reviews` |
+| `/orders/**`       | `/orders/9`, `/orders/9/items/3`     | `/order/9` |
+| `/health`          | `/health`                            | `/health/live` |
+
+```yaml
+scenarios:
+  - name: GetProduct
+    match: { method: GET, path: /products/* }
+    request: { method: GET, path: "/products/{{product_ids}}" }
+  - name: CreateOrder
+    match: { method: post, path: /orders }
+    request: { method: POST, path: /orders, body: '{"productId": {{product_ids}}}' }
+```
+
+Each log entry must match **at most one** scenario. An entry that matches two
+or more is an error (exit `2`, naming the log line and both scenarios), so
+make rules disjoint. An entry matching none is unmatched (see
+`replay.on_unmatched`). The scenario's `request` is what gets sent: the
+matched log entry contributes only the scenario choice and its timing.
 
 ## `checks`
 

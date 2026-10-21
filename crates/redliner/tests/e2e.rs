@@ -131,6 +131,62 @@ async fn spawn_error_mock() -> Mock {
     Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines }
 }
 
+/// Like `spawn_mock`, but sleeps `delay` before answering each request, so a
+/// single worker can only clear a handful of hits per second.
+async fn spawn_slow_mock(delay: std::time::Duration) -> Mock {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let (h, b, l) = (hits.clone(), bodies.clone(), lines.clone());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else { break };
+            let (h, b, l) = (h.clone(), b.clone(), l.clone());
+            tokio::spawn(async move {
+                let mut data = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    data.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&data).to_string();
+                    if let Some(idx) = text.find("\r\n\r\n") {
+                        let len = text[..idx]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if data.len() >= idx + 4 + len {
+                            h.fetch_add(1, Ordering::SeqCst);
+                            let body = text[idx + 4..].to_string();
+                            let first = text.split("\r\n").next().unwrap_or("").to_string();
+                            l.lock().unwrap().push(first);
+                            let is_post = text.starts_with("POST");
+                            b.lock().unwrap().push(format!("{is_post}|{body}"));
+                            tokio::time::sleep(delay).await;
+                            let payload = "{\"data\":{}}";
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                                payload.len()
+                            );
+                            let _ = sock.write_all(resp.as_bytes()).await;
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines }
+}
+
 fn tempdir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("redliner-e2e-{}-{tag}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
@@ -141,9 +197,12 @@ fn write_cfg(dir: &std::path::Path, url: &str, slos: &str) -> std::path::PathBuf
     let p = dir.join("cfg.yaml");
     std::fs::write(
         &p,
+        // The scenario carries a `match` rule (ignored in profile mode) so that
+        // when `--replay` switches the run on, it fails only for the profile
+        // conflict, not for a missing match rule.
         format!(
             "target:\n  url: {url}\nload:\n  profile: constant\n  rate: 50\n  duration: 1s\n\
-             scenarios:\n  - name: ping\n    weight: 1\n    request:\n      query: \"{{ ping }}\"\n{slos}"
+             scenarios:\n  - name: ping\n    weight: 1\n    request:\n      query: \"{{ ping }}\"\n    match:\n      operation: ping\n{slos}"
         ),
     )
     .unwrap();
@@ -285,4 +344,187 @@ async fn e2e_harvest_seeds_pool_and_attacks() {
         lines.iter().any(|l| l == "GET /products/7 HTTP/1.1"),
         "lines: {lines:?}"
     );
+}
+
+/// Writes `log.jsonl` (ops a,b,a,b,a 150ms apart, plus one unmatched
+/// `health` event) and a replay config with scenarios `a` and `b`.
+/// Returns `(config path, log path)`.
+fn write_replay(dir: &std::path::Path, url: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let log = dir.join("log.jsonl");
+    let ev = |ms: u32, method: &str, path: &str, op: &str| {
+        format!(
+            r#"{{"ts":"2026-10-21T10:00:00.{ms:03}Z","method":"{method}","path":"{path}","operation":"{op}"}}"#
+        )
+    };
+    let events = [
+        ev(0, "POST", "/graphql", "a"),
+        ev(75, "GET", "/health", "health"),
+        ev(150, "POST", "/graphql", "b"),
+        ev(300, "POST", "/graphql", "a"),
+        ev(450, "POST", "/graphql", "b"),
+        ev(600, "POST", "/graphql", "a"),
+    ];
+    std::fs::write(&log, events.join("\n")).unwrap();
+    let cfg = dir.join("replay.yaml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "target:\n  url: {url}\nreplay:\n  source: log.jsonl\n\
+             scenarios:\n\
+             \x20 - name: a\n    request:\n      query: \"query a {{ x }}\"\n    match:\n      operation: a\n\
+             \x20 - name: b\n    request:\n      query: \"query b {{ x }}\"\n    match:\n      operation: b\n"
+        ),
+    )
+    .unwrap();
+    (cfg, log)
+}
+
+/// The `operationName` of each POST body the mock received, in arrival order.
+fn operation_names(mock: &Mock) -> Vec<String> {
+    mock.bodies
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|b| {
+            let json = b.strip_prefix("true|").expect("POST body");
+            let v: serde_json::Value = serde_json::from_str(json).unwrap();
+            v["operationName"].as_str().unwrap_or_default().to_string()
+        })
+        .collect()
+}
+
+fn read_manifest(base: &std::path::Path) -> serde_json::Value {
+    let raw = std::fs::read_to_string(newest_report(base).join("run_manifest.json")).unwrap();
+    serde_json::from_str(&raw).unwrap()
+}
+
+#[tokio::test]
+async fn e2e_replay_fires_each_matched_event_in_order() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("replay-order");
+    let (cfg, _) = write_replay(&dir, &mock.url);
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
+    assert_eq!(mock.hits.load(Ordering::SeqCst), 5);
+    assert_eq!(operation_names(&mock), ["a", "b", "a", "b", "a"]);
+    let manifest = read_manifest(&dir);
+    assert_eq!(manifest["replay"]["unmatched"], 1, "manifest: {manifest:#}");
+}
+
+#[tokio::test]
+async fn e2e_replay_paces_like_the_log() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("replay-pace");
+    let (cfg, _) = write_replay(&dir, &mock.url);
+    let start = std::time::Instant::now();
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
+    let wall = start.elapsed();
+    assert!(wall >= std::time::Duration::from_millis(600), "too fast: {wall:?}");
+    assert!(wall < std::time::Duration::from_secs(3), "too slow: {wall:?}");
+}
+
+#[tokio::test]
+async fn e2e_replay_copies_and_speed() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("replay-copies");
+    let (cfg, _) = write_replay(&dir, &mock.url);
+    let start = std::time::Instant::now();
+    let extra = ["--copies", "2", "--speed", "2", "--out", dir.to_str().unwrap()];
+    assert_eq!(run(args(&cfg, &extra)).await, Exit::Ok);
+    let wall = start.elapsed();
+    assert_eq!(mock.hits.load(Ordering::SeqCst), 10);
+    let manifest = read_manifest(&dir);
+    assert_eq!(manifest["replay"]["copies"], 2, "manifest: {manifest:#}");
+    assert_eq!(manifest["replay"]["speed"], 2.0, "manifest: {manifest:#}");
+    assert!(wall < std::time::Duration::from_millis(1500), "too slow: {wall:?}");
+}
+
+#[tokio::test]
+async fn e2e_replay_strict_exits_error_without_firing() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("replay-strict");
+    let (cfg, _) = write_replay(&dir, &mock.url);
+    assert_eq!(
+        run(args(&cfg, &["--strict", "--out", dir.to_str().unwrap()])).await,
+        Exit::Error
+    );
+    assert_eq!(mock.hits.load(Ordering::SeqCst), 0);
+    // build_replay fails before the report dir is created.
+    assert!(!dir.join("latest").exists());
+}
+
+#[tokio::test]
+async fn e2e_replay_validate_prints_schedule_without_firing() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("replay-validate");
+    let (cfg, _) = write_replay(&dir, &mock.url);
+    assert_eq!(
+        run(args(&cfg, &["--validate", "--out", dir.to_str().unwrap()])).await,
+        Exit::Ok
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(mock.hits.load(Ordering::SeqCst), 0);
+    assert!(!dir.join("latest").exists());
+}
+
+#[tokio::test]
+async fn e2e_replay_falling_behind_drops_and_fails() {
+    // A log of 5 ops 20ms apart, amplified x10 => 50 scheduled hits inside an
+    // 80ms span. The mock answers in 200ms and max_workers is 1, so a single
+    // worker clears only a handful before the deadline; the rest drop.
+    let mock = spawn_slow_mock(std::time::Duration::from_millis(200)).await;
+    let dir = tempdir("replay-behind");
+    let log = dir.join("log.jsonl");
+    let events: Vec<String> = (0..5)
+        .map(|i| {
+            format!(
+                r#"{{"ts":"2026-10-21T10:00:00.{:03}Z","method":"POST","path":"/graphql","operation":"a"}}"#,
+                i * 20
+            )
+        })
+        .collect();
+    std::fs::write(&log, events.join("\n")).unwrap();
+    let cfg = dir.join("replay.yaml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "target:\n  url: {}\n  timeout: 300ms\nload:\n  max_workers: 1\nreplay:\n  source: log.jsonl\n\
+             scenarios:\n  - name: a\n    request:\n      query: \"query a {{ x }}\"\n    match:\n      operation: a\n\
+             report:\n  junit: true\n",
+            mock.url
+        ),
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    let extra = ["--copies", "10", "--out", dir.to_str().unwrap()];
+    assert_eq!(run(args(&cfg, &extra)).await, Exit::SloFailed);
+    let wall = start.elapsed();
+    assert!(wall < std::time::Duration::from_secs(3), "too slow: {wall:?}");
+    let served = mock.hits.load(Ordering::SeqCst);
+    assert!(served < 50, "expected drops, served {served} of 50");
+    let manifest = read_manifest(&dir);
+    assert_eq!(manifest["replay"]["hits"], 50, "manifest: {manifest:#}");
+    assert!(
+        manifest["replay"]["dropped"].as_u64().unwrap_or(0) > 0,
+        "manifest: {manifest:#}"
+    );
+    assert_eq!(manifest["passed"], false, "manifest: {manifest:#}");
+    // CI reading junit.xml must see the shortfall, not an all-pass suite.
+    let junit = std::fs::read_to_string(newest_report(&dir).join("junit.xml")).unwrap();
+    assert!(
+        junit.contains("name=\"replay_delivery\"") && junit.contains("<failure"),
+        "junit: {junit}"
+    );
+}
+
+#[tokio::test]
+async fn e2e_replay_flag_rejects_profile_config() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("replay-profile");
+    let (_, log) = write_replay(&dir, &mock.url);
+    let cfg = write_cfg(&dir, &mock.url, "");
+    let extra = ["--replay", log.to_str().unwrap(), "--out", dir.to_str().unwrap()];
+    assert_eq!(run(args(&cfg, &extra)).await, Exit::Error);
+    assert_eq!(mock.hits.load(Ordering::SeqCst), 0);
+    // Rejected during config load, before any report dir exists.
+    assert!(!dir.join("latest").exists());
 }

@@ -47,6 +47,7 @@ mod tests {
             name: name.into(),
             weight: w,
             request: Default::default(),
+            matcher: None,
         }
     }
 

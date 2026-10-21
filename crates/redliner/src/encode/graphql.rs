@@ -107,6 +107,7 @@ mod tests {
                 variables: [("id".to_string(), serde_json::json!(5))].into(),
                 ..Default::default()
             },
+            matcher: None,
         }
     }
 

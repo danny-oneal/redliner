@@ -16,7 +16,8 @@ pub trait Pacer: Send + Sync {
 
 /// Fills in one request per hit.
 pub trait Targeter: Send + Sync {
-    fn target(&self, t: &mut Target) -> Result<(), Error>;
+    /// `seq` is the 0-based hit index this request is for.
+    fn target(&self, seq: u64, t: &mut Target) -> Result<(), Error>;
 }
 
 /// Fires `freq` hits every `per`.

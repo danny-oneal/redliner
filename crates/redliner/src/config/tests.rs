@@ -254,3 +254,185 @@ fn durations_and_slos_parse() {
     assert_eq!(c.slos.p95.as_std(), Duration::from_millis(250));
     assert!(c.slos.enforced());
 }
+
+// ---- replay mode ----
+
+const REPLAY_GQL: &str = "replay: {source: log.jsonl}\nscenarios:\n  - {name: a, request: {query: q}, match: {operation: a}}\n";
+
+#[test]
+fn replay_defaults_applied() {
+    let y = format!("{GQL_HEAD}{REPLAY_GQL}");
+    let c = load_str(&y).unwrap();
+    let r = c.replay.expect("replay block");
+    assert_eq!(r.speed, 1.0);
+    assert_eq!(r.copies, 1);
+    assert_eq!(r.on_unmatched, "skip");
+    assert_eq!(r.format, "json");
+    assert_eq!(r.fields.ts, "ts");
+    assert_eq!(r.fields.method, "method");
+    assert_eq!(r.fields.path, "path");
+    assert_eq!(r.fields.operation, "operation");
+    assert!(r.window.is_none());
+    assert_eq!(c.load.profile, "");
+    assert_eq!(c.load.workers, 10);
+    assert_eq!(c.load.max_workers, 100_000);
+    assert_ne!(c.load.seed, 0);
+    assert!(Path::new(&r.source).is_absolute(), "{}", r.source);
+    assert!(r.source.ends_with("log.jsonl"), "{}", r.source);
+}
+
+#[test]
+fn replay_har_format_inferred() {
+    let y = format!(
+        "{GQL_HEAD}replay: {{source: x.har}}\nscenarios:\n  - {{name: a, request: {{query: q}}, match: {{operation: a}}}}\n"
+    );
+    let c = load_str(&y).unwrap();
+    assert_eq!(c.replay.unwrap().format, "har");
+}
+
+#[test]
+fn replay_rejects_load_pacing() {
+    let y = format!("{GQL_HEAD}load: {{profile: constant, rate: 5}}\n{REPLAY_GQL}");
+    let e = err_text(load_str(&y));
+    assert!(
+        e.contains("load.profile cannot be combined with replay (replay paces from the log)"),
+        "{e}"
+    );
+    assert!(
+        e.contains("load.rate cannot be combined with replay (replay paces from the log)"),
+        "{e}"
+    );
+}
+
+#[test]
+fn replay_requires_a_match_rule() {
+    let y = format!("{GQL_HEAD}replay: {{source: log.jsonl}}\n{ONE_GQL}");
+    let e = err_text(load_str(&y));
+    assert!(
+        e.contains("at least one scenario needs a match rule for replay"),
+        "{e}"
+    );
+}
+
+#[test]
+fn replay_graphql_match_needs_operation() {
+    let y = format!(
+        "{GQL_HEAD}replay: {{source: log.jsonl}}\nscenarios:\n  - {{name: a, request: {{query: q}}, match: {{path: /x}}}}\n"
+    );
+    let e = err_text(load_str(&y));
+    assert!(
+        e.contains("scenario \"a\": match.operation is required for graphql"),
+        "{e}"
+    );
+    assert!(
+        e.contains("scenario \"a\": match.method/path are REST fields; protocol is graphql"),
+        "{e}"
+    );
+}
+
+#[test]
+fn replay_rest_match_needs_path() {
+    let head = "target:\n  url: http://x\n  protocol: rest\nreplay: {source: log.jsonl}\n";
+    let y = format!(
+        "{head}scenarios:\n  - {{name: a, request: {{path: /a}}, match: {{operation: op}}}}\n"
+    );
+    let e = err_text(load_str(&y));
+    assert!(
+        e.contains("scenario \"a\": match.path is required for rest and must start with /"),
+        "{e}"
+    );
+    assert!(
+        e.contains("scenario \"a\": match.operation is a GraphQL field; protocol is rest"),
+        "{e}"
+    );
+    let y = format!(
+        "{head}scenarios:\n  - {{name: a, request: {{path: /a}}, match: {{path: users}}}}\n"
+    );
+    assert!(
+        err_text(load_str(&y)).contains("match.path is required for rest and must start with /")
+    );
+    let y = format!(
+        "{head}scenarios:\n  - {{name: a, request: {{path: /a}}, match: {{method: GET, path: /a}}}}\n"
+    );
+    load_str(&y).unwrap();
+}
+
+#[test]
+fn replay_rejects_bad_knobs() {
+    let scen = "scenarios:\n  - {name: a, request: {query: q}, match: {operation: a}}\n";
+    let bad = |replay: &str| err_text(load_str(&format!("{GQL_HEAD}replay: {replay}\n{scen}")));
+
+    let e = bad("{source: l.jsonl, speed: -1}");
+    assert!(e.contains("replay.speed must be > 0"), "{e}");
+    let e = bad("{source: l.jsonl, on_unmatched: maybe}");
+    assert!(
+        e.contains("replay.on_unmatched \"maybe\" not supported (skip|fail)"),
+        "{e}"
+    );
+    let e = bad("{source: l.jsonl, format: xml}");
+    assert!(
+        e.contains("replay.format \"xml\" not supported (json|har)"),
+        "{e}"
+    );
+    let e = bad("{speed: 2}");
+    assert!(e.contains("replay.source is required"), "{e}");
+    let e = bad("{source: l.jsonl, window: {start: x, end: y}}");
+    assert!(
+        e.contains("replay.window.start/end must both be RFC3339 timestamps"),
+        "{e}"
+    );
+    let e = bad("{source: l.jsonl, window: {start: '2026-01-01T00:00:00Z'}}");
+    assert!(
+        e.contains("replay.window.start/end must both be RFC3339 timestamps"),
+        "{e}"
+    );
+    let e = bad(
+        "{source: l.jsonl, window: {start: '2026-01-02T00:00:00Z', end: '2026-01-01T00:00:00Z'}}",
+    );
+    assert!(e.contains("replay.window.start must be before end"), "{e}");
+    load_str(&format!(
+        "{GQL_HEAD}replay: {{source: l.jsonl, window: {{start: '2026-01-01T00:00:00Z', end: '2026-01-02T00:00:00+01:00'}}}}\n{scen}"
+    ))
+    .unwrap();
+}
+
+#[test]
+fn profile_mode_ignores_match_blocks() {
+    let y = format!(
+        "{GQL_HEAD}load: {{profile: constant, rate: 5, duration: 1s}}\nscenarios:\n  - {{name: a, weight: 1, request: {{query: q}}, match: {{operation: a}}}}\n"
+    );
+    let c = load_str(&y).unwrap();
+    assert!(c.replay.is_none());
+    assert_eq!(c.scenarios[0].matcher.as_ref().unwrap().operation, "a");
+}
+
+#[test]
+fn replay_override_reports_profile_conflict_not_missing_match() {
+    // A constant-profile config whose scenario already has a `match` block:
+    // injecting a replay source via overrides must fail only for the profile
+    // conflict, pinning that the match rule is recognized (Review Focus #5).
+    let dir = tempdir(&format!(
+        "{GQL_HEAD}load: {{profile: constant, rate: 5, duration: 1s}}\nscenarios:\n  - {{name: a, weight: 1, request: {{query: q}}, match: {{operation: a}}}}\n"
+    ));
+    let e = load_config_file_with(&dir.join("c.yaml"), |c| {
+        c.replay.get_or_insert_with(Default::default).source = "x.jsonl".into();
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("load.profile cannot be combined with replay"),
+        "{e}"
+    );
+    assert!(!e.contains("needs a match rule"), "{e}");
+}
+
+#[test]
+fn replay_source_absolute_kept() {
+    let y = format!(
+        "{GQL_HEAD}replay: {{source: /var/log/x.jsonl}}\nscenarios:\n  - {{name: a, request: {{query: q}}, match: {{operation: a}}}}\n"
+    );
+    assert_eq!(
+        load_str(&y).unwrap().replay.unwrap().source,
+        "/var/log/x.jsonl"
+    );
+}

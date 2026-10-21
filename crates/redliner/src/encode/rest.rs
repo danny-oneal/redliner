@@ -132,6 +132,7 @@ mod tests {
                     .collect::<BTreeMap<_, _>>(),
                 ..Default::default()
             },
+            matcher: None,
         }
     }
 
