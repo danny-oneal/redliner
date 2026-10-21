@@ -1,0 +1,66 @@
+# Production-log replay example (GraphQL).
+# Replays configs/replay-sample.jsonl: each log line is matched to a scenario
+# by its `operation`, then fired in log order at the log's own pace. Request
+# values still come from the data pools below, not from the log.
+#
+# One file serves both modes: `weight` is ignored in replay mode and `match` in
+# profile mode. Without a `replay` block, `--replay <log>` switches it on:
+#   redliner --config configs/replay-example.yaml --replay prod.jsonl --speed 2
+version: 1
+
+target:
+  url: http://localhost:8080/query
+  protocol: graphql
+  timeout: 10s
+
+# No load.profile/rate/duration here: the log decides pacing. `workers`,
+# `max_workers` and `seed` still apply.
+load:
+  seed: 42           # fixed seed => same schedule and same request values
+
+replay:
+  source: replay-sample.jsonl   # relative to this file
+  # format: json                # inferred: .har => har, anything else => json
+  speed: 1.0                    # 2.0 replays twice as fast
+  copies: 1                     # 3 = triple the volume over the same duration
+  on_unmatched: skip            # `fail` (or --strict) aborts if anything is unmatched
+  # window:                     # half-open [start, end) slice of the log
+  #   start: "2026-10-20T14:00:01Z"
+  #   end:   "2026-10-20T14:00:04Z"
+  # fields:                     # dot paths into each JSONL object
+  #   ts: ts
+  #   method: method
+  #   path: path
+  #   operation: operation
+
+data:
+  pools:
+    product_ids: { type: range, min: 1, max: 1000 }
+    search_terms: { type: list, values: [latte, mocha, espresso, tea] }
+
+scenarios:
+  - name: GetProduct
+    weight: 70                           # profile mode only; replay ignores it
+    match: { operation: GetProduct }     # exact operation name
+    request:
+      query: |
+        query GetProduct($id:Int!){ product(id:$id){ id name priceCents } }
+      variables: { id: "{{product_ids}}" }
+
+  - name: SearchProducts
+    weight: 30
+    match: { operation: SearchProducts }
+    request:
+      query: |
+        query SearchProducts($q:String!){ searchProducts(q:$q){ id name } }
+      variables: { q: "{{search_terms}}" }
+
+checks:
+  graphql_errors: true
+
+slos:
+  success_rate: 0.99
+  p95: 250ms
+
+report:
+  dir: reports

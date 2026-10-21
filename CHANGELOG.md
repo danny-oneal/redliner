@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Production-log replay** — replay a structured production log (JSON lines
+  or HAR) instead of a synthetic profile. Entries are matched to scenarios by
+  per-scenario `match` rules (GraphQL `operation`; REST `method` + a `*` / `**`
+  path glob) and fired in the log's order and at its inter-arrival pace through
+  the existing attacker, checks, SLOs, and reports. Switch on with a `replay`
+  block or `--replay <log>`; `replay.speed` / `--speed` compress time,
+  `replay.copies` / `--copies` multiply volume over the same duration,
+  `replay.window` slices the log, and `replay.on_unmatched: fail` / `--strict`
+  aborts on unmatched entries. Request values still come from data pools.
+  Malformed log lines are skipped and counted, a replay summary is printed and
+  stored in `run_manifest.json`, and every parse/match failure is exit `2`
+  before any request is fired. See `configs/replay-example.yaml`.
+
 ## [0.1.0] - 2026-10-20
 
 Initial release — a from-scratch Rust port of an internal Go/Vegeta harness.
