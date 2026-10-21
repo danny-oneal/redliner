@@ -15,6 +15,7 @@ use serde::Serialize;
 use volley::{AttackResult, Metrics};
 
 use crate::config::Config;
+use crate::replay::ReplaySummary;
 use crate::slo::{fmt_dur, SloResult};
 
 /// Latency histogram with log-spaced buckets spanning sub-ms lookups to
@@ -267,6 +268,9 @@ pub struct RunManifest {
     pub slo_results: Vec<SloResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passed: Option<bool>,
+    /// What a replay run fired; absent in profile mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay: Option<ReplaySummary>,
 }
 
 /// An RFC3339-ish UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`) for manifests.
@@ -478,6 +482,7 @@ mod tests {
             requests: Some(c.overall().requests),
             slo_results: vec![],
             passed: None,
+            replay: None,
         };
         write_reports(&dir, &c, &manifest).unwrap();
 
@@ -504,6 +509,7 @@ mod tests {
             requests: None,
             slo_results: vec![],
             passed: None,
+            replay: None,
         };
         write_reports(&one_dir, &one, &mf).unwrap();
         assert!(!one_dir.join("per_phase.json").exists());
