@@ -7,6 +7,7 @@ pub mod data;
 pub mod encode;
 pub mod mix;
 pub mod phases;
+pub mod replay;
 pub mod report;
 pub mod run;
 pub mod slo;

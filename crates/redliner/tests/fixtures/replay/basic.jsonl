@@ -1,0 +1,5 @@
+{"ts":"2025-10-20T14:00:01Z","method":"get","path":"/skus/2?x=y","operation":"c"}
+{"ts":"2025-10-20T14:00:00Z","method":"GET","path":"/skus/1","operation":"a"}
+
+{"ts":"2025-10-20T16:00:01.500+02:00","method":"POST","path":"https://api.example.com/orders#top","operation":"d"}
+{"ts":"2025-10-20T14:00:00.250Z","method":"GET","path":"/skus/3","operation":"b"}
