@@ -3,6 +3,7 @@
 
 pub mod matcher;
 pub mod parse;
+pub mod schedule;
 
 use std::path::PathBuf;
 
