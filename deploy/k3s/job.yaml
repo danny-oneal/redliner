@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redliner
+spec:
+  backoffLimit: 0              # a load test runs once; don't retry on SLO failure
+  template:
+    metadata:
+      labels:
+        app: redliner
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: redliner
+          image: redliner:dev
+          imagePullPolicy: Never      # image is imported straight into containerd
+          args:
+            - "--config"
+            - "/etc/redliner/scenario.yaml"
+            - "--out"
+            - "/tmp/reports"
+          # Uncomment to pass an auth token from the redliner-auth Secret
+          # (also uncomment auth: in the ConfigMap scenario):
+          # env:
+          #   - name: BENCH_TOKEN
+          #     valueFrom:
+          #       secretKeyRef:
+          #         name: redliner-auth
+          #         key: BENCH_TOKEN
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: scenario
+              mountPath: /etc/redliner
+              readOnly: true
+            - name: reports
+              mountPath: /tmp
+      volumes:
+        - name: scenario
+          configMap:
+            name: redliner-scenario
+        - name: reports
+          emptyDir: {}

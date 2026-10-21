@@ -191,6 +191,12 @@ is impossible to miss in a scrollback or CI log.
   # upload reports/latest/junit.xml to surface SLOs as test results
 ```
 
+## Run in K3s
+
+Package Redliner as a container image and run it as a one-shot Kubernetes Job
+to load-test an in-cluster service. See **[deploy/k3s/README.md](deploy/k3s/README.md)**
+for the build → `k3s ctr images import` → `kubectl apply` runbook.
+
 ## Development
 
 ```bash

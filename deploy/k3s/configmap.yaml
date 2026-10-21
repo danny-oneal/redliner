@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redliner-scenario
+data:
+  # Self-contained scenario (no harvest / query_file / file pools), so a single
+  # mounted file is enough. To add referenced files, give them their own keys
+  # here and they will mount alongside this one in /etc/redliner.
+  scenario.yaml: |
+    version: 1
+    target:
+      url: http://echo.default.svc.cluster.local      # in-cluster target Service
+      protocol: rest
+      timeout: 5s
+      # auth:                       # uncomment and wire the Secret in job.yaml to enable
+      #   type: bearer
+      #   token_env: BENCH_TOKEN
+    load:
+      profile: constant
+      rate: 20
+      duration: 15s
+      warmup: 2s
+    scenarios:
+      - name: Root
+        weight: 1
+        request:
+          method: GET
+          path: /
+    checks:
+      status: [200]
+    slos:
+      success_rate: 0.99
+      p95: 250ms
+    report:
+      dir: reports
+      junit: true

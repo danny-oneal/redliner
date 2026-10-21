@@ -1,0 +1,10 @@
+# Keep the build context small and free of artifacts/secrets.
+target/
+reports/
+.git/
+docs/
+deploy/
+*.tar
+# Keep the builder on the base image's pinned toolchain (rust:1.88);
+# a copied rust-toolchain.toml would make rustup fetch a floating channel.
+rust-toolchain.toml
