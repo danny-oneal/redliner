@@ -78,15 +78,34 @@ impl Args {
             cfg.replay.get_or_insert_with(Default::default).source =
                 abs.to_string_lossy().into_owned();
         }
-        if let Some(s) = self.speed {
-            cfg.replay.get_or_insert_with(Default::default).speed = s;
+        // The knobs tune an existing replay block (from YAML or `--replay`); on
+        // their own they must not switch the run into replay mode. When they are
+        // passed without a target, `check_replay_knobs` reports one clear error.
+        if let Some(r) = cfg.replay.as_mut() {
+            if let Some(s) = self.speed {
+                r.speed = s;
+            }
+            if let Some(c) = self.copies {
+                r.copies = c;
+            }
+            if self.strict {
+                r.on_unmatched = "fail".into();
+            }
         }
-        if let Some(c) = self.copies {
-            cfg.replay.get_or_insert_with(Default::default).copies = c;
+    }
+
+    /// One clear error when a replay knob was passed with no replay target,
+    /// instead of the pile of validation errors a synthesized empty replay
+    /// block would raise. `has_replay` is whether the loaded config is in
+    /// replay mode.
+    pub fn check_replay_knobs(&self, has_replay: bool) -> Result<(), String> {
+        if !has_replay && (self.speed.is_some() || self.copies.is_some() || self.strict) {
+            return Err(
+                "--speed, --copies and --strict need --replay <log> or a replay block in the config"
+                    .into(),
+            );
         }
-        if self.strict {
-            cfg.replay.get_or_insert_with(Default::default).on_unmatched = "fail".into();
-        }
+        Ok(())
     }
 }
 
@@ -138,5 +157,40 @@ mod tests {
         let mut cfg = Config::default();
         Args::parse_from(["redliner"]).apply_overrides(&mut cfg);
         assert!(cfg.replay.is_none());
+    }
+
+    #[test]
+    fn knobs_without_replay_do_not_create_block() {
+        // --speed/--copies/--strict alone must not switch the run into replay
+        // mode (which produced a pile of confusing validation errors).
+        let mut cfg = Config::default();
+        Args::parse_from(["redliner", "--speed", "2", "--strict"]).apply_overrides(&mut cfg);
+        assert!(cfg.replay.is_none(), "knobs alone must not create a replay block");
+    }
+
+    #[test]
+    fn replay_knobs_without_target_is_one_error() {
+        let msg = "--speed, --copies and --strict need --replay <log> or a replay block in the config";
+        let e = Args::parse_from(["redliner", "--speed", "2"])
+            .check_replay_knobs(false)
+            .unwrap_err();
+        assert_eq!(e, msg);
+        assert_eq!(
+            Args::parse_from(["redliner", "--copies", "3"])
+                .check_replay_knobs(false)
+                .unwrap_err(),
+            msg
+        );
+        assert_eq!(
+            Args::parse_from(["redliner", "--strict"])
+                .check_replay_knobs(false)
+                .unwrap_err(),
+            msg
+        );
+        // With a replay target present, or no knobs, it is fine.
+        assert!(Args::parse_from(["redliner", "--speed", "2"])
+            .check_replay_knobs(true)
+            .is_ok());
+        assert!(Args::parse_from(["redliner"]).check_replay_knobs(false).is_ok());
     }
 }

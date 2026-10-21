@@ -197,9 +197,12 @@ fn write_cfg(dir: &std::path::Path, url: &str, slos: &str) -> std::path::PathBuf
     let p = dir.join("cfg.yaml");
     std::fs::write(
         &p,
+        // The scenario carries a `match` rule (ignored in profile mode) so that
+        // when `--replay` switches the run on, it fails only for the profile
+        // conflict, not for a missing match rule.
         format!(
             "target:\n  url: {url}\nload:\n  profile: constant\n  rate: 50\n  duration: 1s\n\
-             scenarios:\n  - name: ping\n    weight: 1\n    request:\n      query: \"{{ ping }}\"\n{slos}"
+             scenarios:\n  - name: ping\n    weight: 1\n    request:\n      query: \"{{ ping }}\"\n    match:\n      operation: ping\n{slos}"
         ),
     )
     .unwrap();
@@ -515,4 +518,6 @@ async fn e2e_replay_flag_rejects_profile_config() {
     let extra = ["--replay", log.to_str().unwrap(), "--out", dir.to_str().unwrap()];
     assert_eq!(run(args(&cfg, &extra)).await, Exit::Error);
     assert_eq!(mock.hits.load(Ordering::SeqCst), 0);
+    // Rejected during config load, before any report dir exists.
+    assert!(!dir.join("latest").exists());
 }

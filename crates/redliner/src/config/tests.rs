@@ -407,6 +407,26 @@ fn profile_mode_ignores_match_blocks() {
 }
 
 #[test]
+fn replay_override_reports_profile_conflict_not_missing_match() {
+    // A constant-profile config whose scenario already has a `match` block:
+    // injecting a replay source via overrides must fail only for the profile
+    // conflict, pinning that the match rule is recognized (Review Focus #5).
+    let dir = tempdir(&format!(
+        "{GQL_HEAD}load: {{profile: constant, rate: 5, duration: 1s}}\nscenarios:\n  - {{name: a, weight: 1, request: {{query: q}}, match: {{operation: a}}}}\n"
+    ));
+    let e = load_config_file_with(&dir.join("c.yaml"), |c| {
+        c.replay.get_or_insert_with(Default::default).source = "x.jsonl".into();
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("load.profile cannot be combined with replay"),
+        "{e}"
+    );
+    assert!(!e.contains("needs a match rule"), "{e}");
+}
+
+#[test]
 fn replay_source_absolute_kept() {
     let y = format!(
         "{GQL_HEAD}replay: {{source: /var/log/x.jsonl}}\nscenarios:\n  - {{name: a, request: {{query: q}}, match: {{operation: a}}}}\n"

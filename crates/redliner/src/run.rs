@@ -69,6 +69,9 @@ pub async fn run(args: Args) -> Exit {
 
 async fn run_inner(args: Args) -> anyhow::Result<Exit> {
     let cfg = load_config_file_with(&args.config, |c| args.apply_overrides(c))?;
+    // Replay knobs without a replay target are one clear error, not a cascade.
+    args.check_replay_knobs(cfg.replay.is_some())
+        .map_err(anyhow::Error::msg)?;
     // Replay reads and schedules the whole log up front, so a bad log fails
     // before any report dir or request exists.
     let mut replay = cfg
