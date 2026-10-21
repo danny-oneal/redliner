@@ -21,7 +21,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before any request is fired. Epoch timestamp units (s/ms/µs/ns) are inferred
   by magnitude; the post-`speed` span is capped at 24h and the schedule at
   10,000,000 hits (both exit `2`); and a replay that falls behind records
-  `fired`/`dropped`, warns, and exits `1`. See `configs/replay-example.yaml`.
+  `fired`/`dropped`, fails a `replay_delivery` check (also in `junit.xml`),
+  warns, and exits `1`. See `configs/replay-example.yaml`.
 
 ### Changed
 - `volley::Targeter::target` now takes the hit index `seq: u64` (breaking for

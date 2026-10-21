@@ -361,12 +361,29 @@ mod tests {
     #[test]
     fn jsonl_equal_timestamps_keep_file_order() {
         // Determinism: stable sort leaves events with the same ts in file order.
-        let text = "{\"ts\":5,\"method\":\"GET\",\"path\":\"/a\",\"operation\":\"first\"}\n\
-                    {\"ts\":5,\"method\":\"GET\",\"path\":\"/b\",\"operation\":\"second\"}\n\
-                    {\"ts\":5,\"method\":\"GET\",\"path\":\"/c\",\"operation\":\"third\"}\n";
-        let t = parse_jsonl(text, &default_fields());
-        let ops: Vec<_> = t.events.iter().map(|e| e.operation.as_deref().unwrap()).collect();
-        assert_eq!(ops, ["first", "second", "third"]);
+        // 60 tied events interleaved with out-of-order earlier ones: enough
+        // that an unstable sort (insertion sort only below ~20) would scramble
+        // the ties.
+        let mut text = String::new();
+        for i in 0..60 {
+            text.push_str(&format!(
+                "{{\"ts\":5,\"method\":\"GET\",\"path\":\"/t\",\"operation\":\"tie{i:02}\"}}\n"
+            ));
+            if i % 3 == 0 {
+                text.push_str(&format!(
+                    "{{\"ts\":{},\"method\":\"GET\",\"path\":\"/e\",\"operation\":\"early\"}}\n",
+                    i % 4
+                ));
+            }
+        }
+        let t = parse_jsonl(&text, &default_fields());
+        let ties: Vec<_> = t
+            .events
+            .iter()
+            .filter_map(|e| e.operation.as_deref().filter(|o| o.starts_with("tie")))
+            .collect();
+        let want: Vec<String> = (0..60).map(|i| format!("tie{i:02}")).collect();
+        assert_eq!(ties, want);
     }
 
     #[test]

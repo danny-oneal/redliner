@@ -173,18 +173,25 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
     collector.close();
     let elapsed = start.elapsed();
 
-    let results = slo::evaluate(&cfg.slos, collector.overall());
+    let mut results = slo::evaluate(&cfg.slos, collector.overall());
     let mut passed = slo::passed(&results);
 
     // A replay that could not keep up silently dropped its tail, which would
     // otherwise let a short-changed run pass the SLO gate. Record the shortfall
-    // and fail the run regardless of whether SLOs are enforced.
+    // and fail the run regardless of whether SLOs are enforced. The delivery
+    // check joins the SLO results so JUnit and the summary show it too.
     let mut fell_behind = false;
     if let (Some(r), Some(fired)) = (replay.as_mut(), fired) {
         let hits = r.summary.hits;
         let dropped = hits.saturating_sub(fired);
         r.summary.fired = Some(fired);
         r.summary.dropped = Some(dropped);
+        results.push(SloResult {
+            name: "replay_delivery".into(),
+            target: format!("{hits} hits"),
+            observed: format!("{fired} fired"),
+            passed: dropped == 0,
+        });
         if dropped > 0 {
             eprintln!(
                 "warning: replay fell behind: fired {fired} of {hits} scheduled hits \

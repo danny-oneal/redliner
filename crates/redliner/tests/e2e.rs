@@ -487,8 +487,9 @@ async fn e2e_replay_falling_behind_drops_and_fails() {
     std::fs::write(
         &cfg,
         format!(
-            "target:\n  url: {}\n  timeout: 1s\nload:\n  max_workers: 1\nreplay:\n  source: log.jsonl\n\
-             scenarios:\n  - name: a\n    request:\n      query: \"query a {{ x }}\"\n    match:\n      operation: a\n",
+            "target:\n  url: {}\n  timeout: 300ms\nload:\n  max_workers: 1\nreplay:\n  source: log.jsonl\n\
+             scenarios:\n  - name: a\n    request:\n      query: \"query a {{ x }}\"\n    match:\n      operation: a\n\
+             report:\n  junit: true\n",
             mock.url
         ),
     )
@@ -507,6 +508,12 @@ async fn e2e_replay_falling_behind_drops_and_fails() {
         "manifest: {manifest:#}"
     );
     assert_eq!(manifest["passed"], false, "manifest: {manifest:#}");
+    // CI reading junit.xml must see the shortfall, not an all-pass suite.
+    let junit = std::fs::read_to_string(newest_report(&dir).join("junit.xml")).unwrap();
+    assert!(
+        junit.contains("name=\"replay_delivery\"") && junit.contains("<failure"),
+        "junit: {junit}"
+    );
 }
 
 #[tokio::test]

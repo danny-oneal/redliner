@@ -198,7 +198,8 @@ config is a single error (exit `2`): `--speed, --copies and --strict need
 concurrent requests. If the target (or the load generator) cannot keep up, the
 run can reach its deadline with scheduled hits still unfired. Those dropped hits
 are not silently ignored: the run prints a warning, records `fired`/`dropped` in
-the replay summary and `run_manifest.json`, and **exits `1`** (even with no SLOs
+the replay summary and `run_manifest.json`, fails the `replay_delivery` check
+(listed with the SLOs and in `junit.xml`), and **exits `1`** (even with no SLOs
 enforced). Raise `load.max_workers` if the load generator is the bottleneck.
 
 ### Summary
@@ -227,9 +228,11 @@ replay: configs/replay-sample.jsonl
 `hits` is what will fire (after `copies`), `span` the replay duration (after
 `speed`), and `peak` the most hits in any one-second window. Matched counts
 are per scenario before `copies`. Results are attributed to scenarios by name
-in the per-operation report, as in a profile run. After a real run the block
-and manifest also carry a `fired` line (`fired : 14 of 16 (2 dropped)`) when
-the run could not keep up — see **Keeping up** above.
+in the per-operation report, as in a profile run. After every real run (not
+`--validate`) the block and manifest also carry a `fired` line
+(`fired : 14 of 16 (2 dropped)`), and the SLO results gain a
+`replay_delivery` check (also in `junit.xml`) that fails when any hit was
+dropped — see **Keeping up** above.
 
 ## `data`
 

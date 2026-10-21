@@ -68,11 +68,12 @@ pub fn build_schedule(
     for k in 0..copies {
         let shift = (span as u128 * k as u128 / copies as u128) as u64;
         for (m, &o) in matched.iter().zip(&offsets) {
-            let mut p = o + shift;
-            if p > span {
-                p -= span;
+            // Wrap in u128: o + shift can exceed u64 when the span saturates.
+            let mut p = u128::from(o) + u128::from(shift);
+            if p > u128::from(span) {
+                p -= u128::from(span);
             }
-            emitted.push((p, m.scenario));
+            emitted.push((p as u64, m.scenario));
         }
     }
     // Stable: ties keep copy order, then original order within a copy.
@@ -221,6 +222,26 @@ mod tests {
         let s = build_schedule(&matched(&[(5, 0), (5, 1), (5, 2)]), 1.0, 2).unwrap();
         assert_eq!(s.len(), 6);
         assert!(s.hits.iter().all(|h| h.at == Duration::ZERO));
+    }
+
+    #[test]
+    fn copies_on_saturated_span_do_not_overflow() {
+        // A Go zero-time outlier ahead of a recent event saturates the offset
+        // at u64::MAX nanos; rotating it must not overflow (build_replay's 24h
+        // check rejects the span afterwards).
+        let m = vec![
+            Matched {
+                at: "0001-01-01T00:00:00Z".parse().unwrap(),
+                scenario: 0,
+            },
+            Matched {
+                at: at_ms(0),
+                scenario: 1,
+            },
+        ];
+        let s = build_schedule(&m, 1.0, 2).unwrap();
+        assert_eq!(s.len(), 4);
+        assert!(s.hits.windows(2).all(|w| w[0].at <= w[1].at));
     }
 
     #[test]
