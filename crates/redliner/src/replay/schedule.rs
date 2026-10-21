@@ -4,6 +4,11 @@
 use std::time::Duration;
 
 use super::matcher::Matched;
+use super::ReplayError;
+
+/// Hard ceiling on the number of scheduled hits (`matched * copies`), to bound
+/// memory and catch runaway `copies` before any allocation.
+pub const MAX_SCHEDULED_HITS: u64 = 10_000_000;
 
 /// One request to fire, `at` after the start of the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,20 +29,44 @@ pub struct Schedule {
 /// Each copy of the trace is rotated within the trace span rather than
 /// appended, so every copy runs in parallel: `copies` times the volume over
 /// the same overall duration. `speed` divides every resulting offset.
-pub fn build_schedule(matched: &[Matched], speed: f64, copies: u64) -> Schedule {
+pub fn build_schedule(
+    matched: &[Matched],
+    speed: f64,
+    copies: u64,
+) -> Result<Schedule, ReplayError> {
     let Some(first) = matched.first() else {
-        return Schedule::default();
+        return Ok(Schedule::default());
     };
-    let copies = u128::from(copies.max(1));
-    let offsets: Vec<u128> = matched
+    let copies = copies.max(1);
+    // Guard the total before allocating: checked_mul catches overflow, the cap
+    // catches a merely-huge schedule. Both are exit-2 errors, not panics.
+    let total = (matched.len() as u64).checked_mul(copies);
+    match total {
+        Some(t) if t <= MAX_SCHEDULED_HITS => t,
+        _ => {
+            let hits = matched.len() as u128 * copies as u128;
+            return Err(ReplayError::TooLarge {
+                hits: hits.to_string(),
+                cap: MAX_SCHEDULED_HITS,
+            });
+        }
+    };
+
+    // Offsets in nanoseconds, saturated so a pathological span cannot wrap u64
+    // (an over-long span is rejected by the 24h check in build_replay anyway).
+    let offsets: Vec<u64> = matched
         .iter()
-        .map(|m| (m.at - first.at).to_std().map_or(0, |d| d.as_nanos()))
+        .map(|m| {
+            (m.at - first.at)
+                .to_std()
+                .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+        })
         .collect();
     let span = offsets.iter().copied().max().unwrap_or(0);
 
-    let mut emitted: Vec<(u128, usize)> = Vec::with_capacity(matched.len() * copies as usize);
+    let mut emitted: Vec<(u64, usize)> = Vec::with_capacity((matched.len() as u64 * copies) as usize);
     for k in 0..copies {
-        let shift = span * k / copies;
+        let shift = (span as u128 * k as u128 / copies as u128) as u64;
         for (m, &o) in matched.iter().zip(&offsets) {
             let mut p = o + shift;
             if p > span {
@@ -56,7 +85,7 @@ pub fn build_schedule(matched: &[Matched], speed: f64, copies: u64) -> Schedule 
             scenario,
         })
         .collect();
-    Schedule { hits }
+    Ok(Schedule { hits })
 }
 
 impl Schedule {
@@ -117,7 +146,7 @@ mod tests {
 
     #[test]
     fn offsets_relative_to_first_event() {
-        let s = build_schedule(&matched(&[(0, 0), (250, 0), (1000, 0)]), 1.0, 1);
+        let s = build_schedule(&matched(&[(0, 0), (250, 0), (1000, 0)]), 1.0, 1).unwrap();
         assert_eq!(ats(&s), vec![ms(0), ms(250), ms(1000)]);
     }
 
@@ -125,11 +154,11 @@ mod tests {
     fn speed_divides_gaps() {
         let m = matched(&[(0, 0), (250, 0), (1000, 0)]);
         assert_eq!(
-            ats(&build_schedule(&m, 2.0, 1)),
+            ats(&build_schedule(&m, 2.0, 1).unwrap()),
             vec![ms(0), ms(125), ms(500)]
         );
         assert_eq!(
-            ats(&build_schedule(&m, 0.5, 1)),
+            ats(&build_schedule(&m, 0.5, 1).unwrap()),
             vec![ms(0), ms(500), ms(2000)]
         );
     }
@@ -137,7 +166,7 @@ mod tests {
     #[test]
     fn copies_multiply_hits_within_span() {
         let m = matched(&[(0, 0), (1000, 1), (2000, 0), (3000, 2)]);
-        let s = build_schedule(&m, 1.0, 3);
+        let s = build_schedule(&m, 1.0, 3).unwrap();
         assert_eq!(s.len(), 12);
         assert!(s.hits.iter().all(|h| h.at <= ms(3000)));
         assert!(s.hits.windows(2).all(|w| w[0].at <= w[1].at));
@@ -160,24 +189,61 @@ mod tests {
     #[test]
     fn copies_rotate_within_span() {
         // Span 3s, 2 copies: copy 1 is shifted by 1.5s and wraps past the end.
-        let s = build_schedule(&matched(&[(0, 0), (3000, 1)]), 1.0, 2);
+        let s = build_schedule(&matched(&[(0, 0), (3000, 1)]), 1.0, 2).unwrap();
         assert_eq!(ats(&s), vec![ms(0), ms(1500), ms(1500), ms(3000)]);
-        // Tie at 1.5s: copy 0's hit (scenario 1) is ordered before copy 1's.
+        // Tie at 1.5s: both hits are from copy 1 (the shifted scenario-0 event
+        // and the wrapped scenario-1 event), kept in copy-1 original order.
         let scenarios: Vec<usize> = s.hits.iter().map(|h| h.scenario).collect();
         assert_eq!(scenarios, vec![0, 0, 1, 1]);
     }
 
     #[test]
+    fn copies_tie_orders_copy_zero_first() {
+        // copy 0's offsets land on the same instants as copy 1's rotated ones;
+        // the stable sort keeps copy 0 ahead of copy 1 at each tie.
+        let s = build_schedule(&matched(&[(0, 0), (500, 1), (1000, 2)]), 1.0, 2).unwrap();
+        let seq: Vec<(Duration, usize)> = s.hits.iter().map(|h| (h.at, h.scenario)).collect();
+        assert_eq!(
+            seq,
+            vec![
+                (ms(0), 0),
+                (ms(500), 1), // copy 0
+                (ms(500), 0), // copy 1
+                (ms(500), 2), // copy 1
+                (ms(1000), 2), // copy 0, ahead of copy 1 at the same instant
+                (ms(1000), 1), // copy 1
+            ]
+        );
+    }
+
+    #[test]
     fn copies_on_zero_span_trace() {
-        let s = build_schedule(&matched(&[(5, 0), (5, 1), (5, 2)]), 1.0, 2);
+        let s = build_schedule(&matched(&[(5, 0), (5, 1), (5, 2)]), 1.0, 2).unwrap();
         assert_eq!(s.len(), 6);
         assert!(s.hits.iter().all(|h| h.at == Duration::ZERO));
     }
 
     #[test]
     fn zero_copies_is_treated_as_one() {
-        let s = build_schedule(&matched(&[(0, 0), (10, 0)]), 1.0, 0);
+        let s = build_schedule(&matched(&[(0, 0), (10, 0)]), 1.0, 0).unwrap();
         assert_eq!(s.len(), 2);
+    }
+
+    #[test]
+    fn huge_copies_returns_too_large_not_panic() {
+        let err = build_schedule(&matched(&[(0, 0), (10, 0)]), 1.0, u64::MAX).unwrap_err();
+        assert!(matches!(err, ReplayError::TooLarge { .. }), "{err}");
+        assert!(err.to_string().contains("cap 10000000"), "{err}");
+    }
+
+    #[test]
+    fn cap_breach_returns_too_large() {
+        // 2 events x 6_000_000 copies = 12M > 10M cap.
+        let err = build_schedule(&matched(&[(0, 0), (10, 1)]), 1.0, 6_000_000).unwrap_err();
+        assert!(
+            matches!(&err, ReplayError::TooLarge { hits, .. } if hits == "12000000"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -187,19 +253,20 @@ mod tests {
             &matched(&[(0, 0), (300, 0), (999, 0), (5000, 0), (5500, 0)]),
             1.0,
             1,
-        );
+        )
+        .unwrap();
         assert_eq!(s.peak_rps(), 3);
         // Window is half-open: hits exactly 1s apart do not share a window.
-        let s = build_schedule(&matched(&[(0, 0), (1000, 0), (2000, 0)]), 1.0, 1);
+        let s = build_schedule(&matched(&[(0, 0), (1000, 0), (2000, 0)]), 1.0, 1).unwrap();
         assert_eq!(s.peak_rps(), 1);
         // Copies raise the peak.
-        let s = build_schedule(&matched(&[(0, 0), (500, 0)]), 1.0, 4);
+        let s = build_schedule(&matched(&[(0, 0), (500, 0)]), 1.0, 4).unwrap();
         assert_eq!(s.peak_rps(), 8);
     }
 
     #[test]
     fn empty_schedule() {
-        let s = build_schedule(&[], 1.0, 3);
+        let s = build_schedule(&[], 1.0, 3).unwrap();
         assert_eq!(s.len(), 0);
         assert!(s.is_empty());
         assert_eq!(s.span(), Duration::ZERO);

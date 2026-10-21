@@ -48,6 +48,8 @@ pub enum ReplayError {
         filtered: u64,
         unmatched: u64,
     },
+    #[error("replay: schedule would have {hits} hits (cap {cap}); lower copies or narrow replay.window")]
+    TooLarge { hits: String, cap: u64 },
     #[error("replay: schedule spans {span} (> 24h); check timestamp units or outlier timestamps, narrow replay.window, or raise --speed")]
     SpanTooLong { span: String },
     #[error("replay: config has no replay block")]
@@ -168,7 +170,7 @@ pub fn build_replay(cfg: &Config) -> Result<Replay, ReplayError> {
         });
     }
 
-    let schedule = build_schedule(&res.matched, rc.speed, rc.copies);
+    let schedule = build_schedule(&res.matched, rc.speed, rc.copies)?;
     // After speed compression, an absurd span (bad timestamp units, an outlier,
     // or a tiny speed) would run for days; reject it up front.
     const MAX_SPAN: Duration = Duration::from_secs(24 * 60 * 60);
