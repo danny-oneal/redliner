@@ -21,4 +21,7 @@ RUN cargo build --release -p redliner --locked
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=builder /app/target/release/redliner /usr/local/bin/redliner
+# Default CWD so a relative report.dir (default "reports") resolves under the
+# writable /tmp (emptyDir in the Job) instead of the read-only root.
+WORKDIR /tmp
 ENTRYPOINT ["/usr/local/bin/redliner"]
