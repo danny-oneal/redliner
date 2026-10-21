@@ -4,3 +4,9 @@
 
 # Run report output
 reports/
+
+# Container image tarball (make image-save)
+redliner-dev.tar
+
+# Filled-in auth secret — never commit
+deploy/k3s/secret.yaml
