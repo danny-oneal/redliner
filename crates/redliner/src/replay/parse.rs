@@ -52,14 +52,18 @@ impl Trace {
 
 /// Read `cfg.source` in `cfg.format` and apply `cfg.window`.
 pub fn read_trace(cfg: &ReplayConfig) -> Result<Trace, ReplayError> {
-    let text = std::fs::read_to_string(&cfg.source).map_err(|source| ReplayError::Io {
+    let io_err = |source| ReplayError::Io {
         path: cfg.source.clone().into(),
         source,
-    })?;
+    };
+    // JSONL is read as bytes so one invalid-UTF-8 line is a malformed line,
+    // not a fatal whole-file error. HAR is a single JSON document.
     let mut trace = if cfg.format == "har" {
+        let text = std::fs::read_to_string(&cfg.source).map_err(io_err)?;
         parse_har(&text)?
     } else {
-        parse_jsonl(&text, &cfg.fields)
+        let bytes = std::fs::read(&cfg.source).map_err(io_err)?;
+        parse_jsonl_bytes(&bytes, &cfg.fields)
     };
     if let Some(w) = &cfg.window {
         apply_window(&mut trace, w)?;
@@ -67,20 +71,32 @@ pub fn read_trace(cfg: &ReplayConfig) -> Result<Trace, ReplayError> {
     Ok(trace)
 }
 
-/// One JSON object per line; blank lines are skipped and not counted.
-pub fn parse_jsonl(text: &str, fields: &ReplayFields) -> Trace {
+/// One JSON object per line; blank lines are skipped and not counted. A line
+/// that is not valid UTF-8 is counted malformed rather than aborting the file.
+pub fn parse_jsonl_bytes(bytes: &[u8], fields: &ReplayFields) -> Trace {
     let mut trace = Trace::default();
-    for (i, raw) in text.lines().enumerate() {
+    for (i, raw) in bytes.split(|&b| b == b'\n').enumerate() {
         let line = i + 1;
-        if raw.trim().is_empty() {
-            continue;
-        }
-        match jsonl_event(raw, line, fields) {
-            Ok(ev) => trace.events.push(ev),
-            Err(reason) => trace.reject(line, &reason),
+        // Tolerate CRLF by dropping a single trailing '\r'.
+        let raw = match raw.split_last() {
+            Some((b'\r', head)) => head,
+            _ => raw,
+        };
+        match std::str::from_utf8(raw) {
+            Ok(s) if s.trim().is_empty() => continue,
+            Ok(s) => match jsonl_event(s, line, fields) {
+                Ok(ev) => trace.events.push(ev),
+                Err(reason) => trace.reject(line, &reason),
+            },
+            Err(_) => trace.reject(line, "invalid UTF-8"),
         }
     }
     trace.finish()
+}
+
+/// One JSON object per line; blank lines are skipped and not counted.
+pub fn parse_jsonl(text: &str, fields: &ReplayFields) -> Trace {
+    parse_jsonl_bytes(text.as_bytes(), fields)
 }
 
 fn jsonl_event(raw: &str, line: usize, fields: &ReplayFields) -> Result<RawEvent, String> {
@@ -179,18 +195,35 @@ fn required_str(doc: &Value, path: &str) -> Result<String, String> {
     }
 }
 
-/// A string is RFC3339; a number is epoch seconds (fractions allowed).
+/// A string is RFC3339; a number is an epoch whose unit is inferred from its
+/// magnitude: `>= 1e17` → nanoseconds, `>= 1e14` → microseconds, `>= 1e11` →
+/// milliseconds, else seconds (fractions allowed).
 fn parse_ts(v: &Value) -> Result<DateTime<Utc>, String> {
     match v {
         Value::String(s) => parse_rfc3339(s),
         Value::Number(n) => {
-            let secs = n
+            let f = n
                 .as_f64()
                 .filter(|f| f.is_finite())
                 .ok_or_else(|| format!("{n} is not a valid epoch timestamp"))?;
-            let whole = secs.floor();
-            let nanos = (((secs - whole) * 1e9).round() as u32).min(999_999_999);
-            DateTime::from_timestamp(whole as i64, nanos)
+            // Nanoseconds-per-unit, chosen by magnitude so ms/µs/ns logs are
+            // not mistaken for seconds (which stretches a run for decades).
+            let per_unit: i128 = match f.abs() {
+                a if a >= 1e17 => 1,
+                a if a >= 1e14 => 1_000,
+                a if a >= 1e11 => 1_000_000,
+                _ => 1_000_000_000,
+            };
+            // Integer timestamps convert exactly (f64 loses precision past 2^53,
+            // which matters at nanosecond scale); fractional ones use the float.
+            let total_nanos: i128 = match n.as_i64() {
+                Some(i) => i as i128 * per_unit,
+                None => (f * per_unit as f64).round() as i128,
+            };
+            let secs = i64::try_from(total_nanos.div_euclid(1_000_000_000))
+                .map_err(|_| format!("{n} is out of range for an epoch timestamp"))?;
+            let nanos = total_nanos.rem_euclid(1_000_000_000) as u32;
+            DateTime::from_timestamp(secs, nanos)
                 .ok_or_else(|| format!("{n} is out of range for an epoch timestamp"))
         }
         _ => Err("timestamp is neither a string nor a number".into()),
@@ -209,7 +242,10 @@ fn normalize_path(raw: &str) -> Result<String, String> {
     if path.starts_with('/') {
         Ok(path.to_owned())
     } else {
-        Err(format!("path {raw:?} does not start with '/'"))
+        // Strip the query and fragment from the reported value: they can carry
+        // secrets and would otherwise land in malformed_examples and the manifest.
+        let shown = raw.find(['?', '#']).map_or(raw, |i| &raw[..i]);
+        Err(format!("path {shown:?} does not start with '/'"))
     }
 }
 
@@ -287,6 +323,77 @@ mod tests {
         let t = parse_jsonl(text, &default_fields());
         assert_eq!(t.malformed, 0);
         assert_eq!(offsets(&t), [Duration::ZERO, Duration::from_millis(500)]);
+    }
+
+    #[test]
+    fn jsonl_epoch_unit_inferred_by_magnitude() {
+        // The same instant as epoch seconds, millis, micros, and nanos.
+        let text = "{\"ts\":1760968800,\"method\":\"GET\",\"path\":\"/s\"}\n\
+                    {\"ts\":1760968800000,\"method\":\"GET\",\"path\":\"/ms\"}\n\
+                    {\"ts\":1760968800000000,\"method\":\"GET\",\"path\":\"/us\"}\n\
+                    {\"ts\":1760968800000000000,\"method\":\"GET\",\"path\":\"/ns\"}\n";
+        let t = parse_jsonl(text, &default_fields());
+        assert_eq!(t.malformed, 0);
+        let ats: Vec<_> = t.events.iter().map(|e| e.at).collect();
+        assert!(ats.windows(2).all(|w| w[0] == w[1]), "ats differ: {ats:?}");
+        assert_eq!(ats[0].timestamp(), 1760968800);
+        assert_eq!(ats[0].timestamp_subsec_nanos(), 0);
+    }
+
+    #[test]
+    fn jsonl_epoch_millis_sub_second() {
+        // Millis are read as millis (250ms apart), not as seconds.
+        let text = "{\"ts\":1760968800000,\"method\":\"GET\",\"path\":\"/a\"}\n\
+                    {\"ts\":1760968800250,\"method\":\"GET\",\"path\":\"/b\"}\n";
+        let t = parse_jsonl(text, &default_fields());
+        assert_eq!(t.malformed, 0);
+        assert_eq!(offsets(&t), [Duration::ZERO, Duration::from_millis(250)]);
+    }
+
+    #[test]
+    fn jsonl_epoch_nanos_preserve_sub_second() {
+        let text = "{\"ts\":1760968800000000000,\"method\":\"GET\",\"path\":\"/a\"}\n\
+                    {\"ts\":1760968800123456789,\"method\":\"GET\",\"path\":\"/b\"}\n";
+        let t = parse_jsonl(text, &default_fields());
+        assert_eq!(t.events[1].at.timestamp_subsec_nanos(), 123456789);
+    }
+
+    #[test]
+    fn jsonl_equal_timestamps_keep_file_order() {
+        // Determinism: stable sort leaves events with the same ts in file order.
+        let text = "{\"ts\":5,\"method\":\"GET\",\"path\":\"/a\",\"operation\":\"first\"}\n\
+                    {\"ts\":5,\"method\":\"GET\",\"path\":\"/b\",\"operation\":\"second\"}\n\
+                    {\"ts\":5,\"method\":\"GET\",\"path\":\"/c\",\"operation\":\"third\"}\n";
+        let t = parse_jsonl(text, &default_fields());
+        let ops: Vec<_> = t.events.iter().map(|e| e.operation.as_deref().unwrap()).collect();
+        assert_eq!(ops, ["first", "second", "third"]);
+    }
+
+    #[test]
+    fn jsonl_invalid_utf8_line_is_malformed_not_fatal() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"{\"ts\":1,\"method\":\"GET\",\"path\":\"/a\"}\n");
+        bytes.extend_from_slice(&[0xff, 0xfe]); // invalid UTF-8 on line 2
+        bytes.push(b'\n');
+        bytes.extend_from_slice(b"{\"ts\":2,\"method\":\"GET\",\"path\":\"/b\"}\n");
+        let t = parse_jsonl_bytes(&bytes, &default_fields());
+        assert_eq!(t.events.len(), 2);
+        assert_eq!(t.malformed, 1);
+        assert!(t.malformed_examples[0].starts_with("line 2:"), "{:?}", t.malformed_examples);
+        assert!(
+            t.malformed_examples[0].contains("invalid UTF-8"),
+            "{:?}",
+            t.malformed_examples
+        );
+    }
+
+    #[test]
+    fn normalize_path_error_strips_query_and_fragment() {
+        // A secret in the query string must not leak into the malformed reason.
+        let err = normalize_path("notapath?token=s3cret#frag").unwrap_err();
+        assert!(!err.contains("s3cret"), "secret leaked: {err}");
+        assert!(!err.contains("frag"), "fragment leaked: {err}");
+        assert!(err.contains("notapath"), "{err}");
     }
 
     #[test]
@@ -403,6 +510,9 @@ mod tests {
         let e = read_trace(&c).unwrap_err();
         assert!(matches!(e, ReplayError::Io { .. }));
         assert!(e.to_string().starts_with("replay: read "));
+        // The io source is carried by #[source] (shown once by the anyhow
+        // chain), not duplicated into the Display message.
+        assert!(!e.to_string().contains("os error"), "source leaked: {e}");
     }
 
     #[test]

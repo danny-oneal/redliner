@@ -9,6 +9,7 @@ pub mod targeter;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -21,7 +22,7 @@ use self::schedule::{build_schedule, Schedule};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayError {
-    #[error("replay: read {}: {source}", path.display())]
+    #[error("replay: read {}", path.display())]
     Io {
         path: PathBuf,
         #[source]
@@ -47,6 +48,8 @@ pub enum ReplayError {
         filtered: u64,
         unmatched: u64,
     },
+    #[error("replay: schedule spans {span} (> 24h); check timestamp units or outlier timestamps, narrow replay.window, or raise --speed")]
+    SpanTooLong { span: String },
     #[error("replay: config has no replay block")]
     NotConfigured,
 }
@@ -166,6 +169,14 @@ pub fn build_replay(cfg: &Config) -> Result<Replay, ReplayError> {
     }
 
     let schedule = build_schedule(&res.matched, rc.speed, rc.copies);
+    // After speed compression, an absurd span (bad timestamp units, an outlier,
+    // or a tiny speed) would run for days; reject it up front.
+    const MAX_SPAN: Duration = Duration::from_secs(24 * 60 * 60);
+    if schedule.span() > MAX_SPAN {
+        return Err(ReplayError::SpanTooLong {
+            span: fmt_dur(schedule.span()),
+        });
+    }
     let summary = ReplaySummary {
         source: rc.source.clone(),
         parsed,
@@ -284,6 +295,21 @@ mod tests {
             err.to_string(),
             "replay: no events left to replay (parsed 2, malformed 1, outside window 0, unmatched 2)"
         );
+    }
+
+    #[test]
+    fn build_replay_rejects_span_over_24h() {
+        // A `ts:0` outlier stretches the span to ~decades; that must be a clean
+        // exit-2 error, not a multi-year run.
+        let log = [
+            r#"{"ts":0,"method":"POST","path":"/graphql","operation":"OpA"}"#,
+            r#"{"ts":1760968800,"method":"POST","path":"/graphql","operation":"OpB"}"#,
+        ];
+        let err = build_replay(&config(temp_log("outlier", &log), "skip")).unwrap_err();
+        assert!(matches!(err, ReplayError::SpanTooLong { .. }), "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("(> 24h)"), "{msg}");
+        assert!(msg.contains("narrow replay.window"), "{msg}");
     }
 
     #[test]

@@ -99,8 +99,8 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
         Some(r) => {
             let s = &r.summary;
             eprintln!(
-                "target={} replay={} hits={} speed={} copies={} seed={}",
-                cfg.target.url, s.source, s.hits, s.speed, s.copies, cfg.load.seed
+                "target={} replay={} hits={} span={} speed={} copies={} seed={}",
+                cfg.target.url, s.source, s.hits, s.span, s.speed, s.copies, cfg.load.seed
             );
         }
         None => eprintln!(
