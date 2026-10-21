@@ -153,7 +153,7 @@ async fn run_hit<T: Targeter + ?Sized>(
     let timestamp = SystemTime::now();
     let mut target = Target::default();
 
-    if let Err(e) = targeter.target(&mut target) {
+    if let Err(e) = targeter.target(seq, &mut target) {
         return AttackResult {
             attack: name,
             seq,
@@ -242,7 +242,7 @@ mod tests {
     }
 
     impl Targeter for UrlTargeter {
-        fn target(&self, t: &mut Target) -> Result<(), Error> {
+        fn target(&self, _seq: u64, t: &mut Target) -> Result<(), Error> {
             t.method = http::Method::GET;
             t.url = self.url.clone();
             Ok(())
@@ -411,5 +411,45 @@ mod tests {
             "fired too many ({}) — did not stop at the deadline",
             results.len()
         );
+    }
+
+    /// A targeter that records the hit index it was called with.
+    struct SeqTargeter {
+        url: String,
+        seen: std::sync::Mutex<Vec<u64>>,
+    }
+
+    impl Targeter for SeqTargeter {
+        fn target(&self, seq: u64, t: &mut Target) -> Result<(), Error> {
+            self.seen.lock().unwrap().push(seq);
+            t.method = http::Method::GET;
+            t.url = self.url.clone();
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn attack_passes_hit_index_to_targeter() {
+        let url = spawn_ok_server().await;
+        let attacker = Attacker::new(cfg(Duration::from_secs(5))).unwrap();
+        let pacer = Arc::new(ConstantPacer { freq: 50, per: Duration::from_secs(1) });
+        let targeter = Arc::new(SeqTargeter { url, seen: std::sync::Mutex::new(Vec::new()) });
+
+        let mut rx = attacker.attack(
+            targeter.clone(),
+            pacer,
+            Duration::from_millis(300),
+            "seq".to_string(),
+        );
+
+        let mut results = Vec::new();
+        while let Some(r) = rx.recv().await {
+            results.push(r);
+        }
+
+        let mut seen = targeter.seen.lock().unwrap().clone();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..results.len() as u64).collect::<Vec<_>>());
+        assert!(results.iter().all(|r| seen.contains(&r.seq)));
     }
 }

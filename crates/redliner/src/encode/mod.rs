@@ -79,7 +79,7 @@ impl MixTargeter {
 }
 
 impl Targeter for MixTargeter {
-    fn target(&self, t: &mut Target) -> Result<(), volley::Error> {
+    fn target(&self, _seq: u64, t: &mut Target) -> Result<(), volley::Error> {
         let mut rng = self
             .rng
             .lock()
@@ -124,8 +124,8 @@ mod tests {
         let (a, b) = (mk(), mk());
         for _ in 0..50 {
             let (mut ta, mut tb) = (Target::default(), Target::default());
-            a.target(&mut ta).unwrap();
-            b.target(&mut tb).unwrap();
+            a.target(0, &mut ta).unwrap();
+            b.target(0, &mut tb).unwrap();
             assert_eq!(ta.url, tb.url);
         }
     }
