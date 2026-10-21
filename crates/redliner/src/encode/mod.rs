@@ -104,6 +104,7 @@ mod tests {
                 query: format!("query {name} {{ x }}"),
                 ..Default::default()
             },
+            matcher: None,
         }
     }
 

@@ -34,6 +34,18 @@ pub struct Args {
     /// Validate config and exit.
     #[arg(long)]
     pub validate: bool,
+    /// Replay a production request log (JSONL or HAR) instead of a load profile.
+    #[arg(long)]
+    pub replay: Option<PathBuf>,
+    /// Replay time compression: 2 replays twice as fast (needs replay).
+    #[arg(long)]
+    pub speed: Option<f64>,
+    /// Concurrent copies of the replayed log (needs replay).
+    #[arg(long)]
+    pub copies: Option<u64>,
+    /// Fail instead of skipping log entries no scenario matches.
+    #[arg(long)]
+    pub strict: bool,
 }
 
 impl Args {
@@ -57,6 +69,24 @@ impl Args {
         if let Some(o) = &self.out {
             cfg.report.dir = o.clone();
         }
+        if let Some(p) = &self.replay {
+            // Absolute against the caller's cwd: the config-dir join in
+            // `resolve_files` must not re-root a path typed on the command line.
+            let abs = std::env::current_dir()
+                .map(|d| d.join(p))
+                .unwrap_or_else(|_| p.clone());
+            cfg.replay.get_or_insert_with(Default::default).source =
+                abs.to_string_lossy().into_owned();
+        }
+        if let Some(s) = self.speed {
+            cfg.replay.get_or_insert_with(Default::default).speed = s;
+        }
+        if let Some(c) = self.copies {
+            cfg.replay.get_or_insert_with(Default::default).copies = c;
+        }
+        if self.strict {
+            cfg.replay.get_or_insert_with(Default::default).on_unmatched = "fail".into();
+        }
     }
 }
 
@@ -74,5 +104,39 @@ mod tests {
         assert_eq!(cfg.load.rate, 9.0);
         assert_eq!(cfg.load.duration.as_std().as_secs(), 2);
         assert_eq!(cfg.target.url, "http://a");
+    }
+
+    #[test]
+    fn replay_flags_switch_mode() {
+        let mut cfg = Config::default();
+        let args = Args::parse_from([
+            "redliner",
+            "--replay",
+            "prod.jsonl",
+            "--speed",
+            "2",
+            "--copies",
+            "3",
+            "--strict",
+        ]);
+        args.apply_overrides(&mut cfg);
+        let r = cfg.replay.expect("replay set by flags");
+        assert_eq!(
+            r.source,
+            std::env::current_dir()
+                .unwrap()
+                .join("prod.jsonl")
+                .to_string_lossy()
+        );
+        assert_eq!(r.speed, 2.0);
+        assert_eq!(r.copies, 3);
+        assert_eq!(r.on_unmatched, "fail");
+    }
+
+    #[test]
+    fn no_replay_flags_leave_replay_unset() {
+        let mut cfg = Config::default();
+        Args::parse_from(["redliner"]).apply_overrides(&mut cfg);
+        assert!(cfg.replay.is_none());
     }
 }

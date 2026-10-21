@@ -9,7 +9,7 @@ use volley::{Attacker, AttackerConfig, ConstantPacer, Metrics, Pacer};
 
 use crate::checks::Checker;
 use crate::cli::Args;
-use crate::config::{load_config_file, Config};
+use crate::config::{load_config_file_with, Config};
 use crate::data;
 use crate::encode::{new_encoder, MixTargeter};
 use crate::mix::WeightedMix;
@@ -65,8 +65,7 @@ pub async fn run(args: Args) -> Exit {
 }
 
 async fn run_inner(args: Args) -> anyhow::Result<Exit> {
-    let mut cfg = load_config_file(&args.config)?;
-    args.apply_overrides(&mut cfg);
+    let cfg = load_config_file_with(&args.config, |c| args.apply_overrides(c))?;
 
     if args.validate {
         let proto = serde_json::to_value(cfg.target.protocol)?;

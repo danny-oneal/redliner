@@ -31,6 +31,8 @@ pub struct Config {
     pub load: LoadConfig,
     pub data: DataConfig,
     pub scenarios: Vec<Scenario>,
+    /// Production-log replay; `Some` switches the run into replay mode.
+    pub replay: Option<ReplayConfig>,
     pub checks: ChecksConfig,
     pub slos: SloConfig,
     pub report: ReportConfig,
@@ -133,6 +135,57 @@ pub struct Scenario {
     pub name: String,
     pub weight: f64,
     pub request: RequestConfig,
+    /// Replay-mode rule selecting which logged requests this scenario
+    /// serves. Ignored in profile mode.
+    #[serde(rename = "match")]
+    pub matcher: Option<MatchConfig>,
+}
+
+/// Which logged entries a scenario replays. GraphQL scenarios match on
+/// `operation`; REST scenarios on `method` (optional) and `path`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MatchConfig {
+    pub operation: String,
+    pub method: String,
+    pub path: String,
+}
+
+/// Replay a production request log at its recorded pace.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ReplayConfig {
+    /// Log file; a relative path resolves against the config directory.
+    pub source: String,
+    /// json | har (inferred from the extension when empty).
+    pub format: String,
+    /// Half-open `[start, end)` slice of the log.
+    pub window: Option<WindowConfig>,
+    /// Time compression: 2.0 replays twice as fast.
+    pub speed: f64,
+    /// Concurrent copies of the log.
+    pub copies: u64,
+    /// What to do with entries no scenario matches: skip | fail.
+    pub on_unmatched: String,
+    pub fields: ReplayFields,
+}
+
+/// RFC3339 timestamps bounding the replayed slice of the log.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct WindowConfig {
+    pub start: String,
+    pub end: String,
+}
+
+/// Dot paths into each JSONL object (same syntax as `data::extract_path`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ReplayFields {
+    pub ts: String,
+    pub method: String,
+    pub path: String,
+    pub operation: String,
 }
 
 /// Tagged union across the two protocols; validation enforces the fields
@@ -222,6 +275,16 @@ pub enum ConfigError {
 /// Read, decode, default, resolve files, and validate a scenario file.
 /// Fail-fast: every problem is reported before a request is fired.
 pub fn load_config_file(path: &Path) -> Result<Config, ConfigError> {
+    load_config_file_with(path, |_| {})
+}
+
+/// Like [`load_config_file`], but runs `overrides` (e.g. CLI flags) after
+/// parsing and before defaults and validation, so overrides are validated
+/// and can switch the config into replay mode.
+pub fn load_config_file_with(
+    path: &Path,
+    overrides: impl FnOnce(&mut Config),
+) -> Result<Config, ConfigError> {
     let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
         path: path.to_path_buf(),
         source,
@@ -230,6 +293,7 @@ pub fn load_config_file(path: &Path) -> Result<Config, ConfigError> {
         path: path.to_path_buf(),
         source,
     })?;
+    overrides(&mut cfg);
     cfg.apply_defaults();
     let base = path.parent().unwrap_or_else(|| Path::new(""));
     cfg.resolve_files(base, path)?;
@@ -265,6 +329,11 @@ impl Config {
                 p.path = base_dir.join(&p.path).to_string_lossy().into_owned();
             }
         }
+        if let Some(r) = &mut self.replay {
+            if !r.source.is_empty() && !Path::new(&r.source).is_absolute() {
+                r.source = base_dir.join(&r.source).to_string_lossy().into_owned();
+            }
+        }
         Ok(())
     }
 
@@ -286,14 +355,18 @@ impl Config {
         let protocol = t.protocol;
 
         let l = &mut self.load;
-        if l.profile.is_empty() {
-            l.profile = "poisson".into();
-        }
-        if l.rate == 0.0 && l.steps.is_empty() && l.ramp.to == 0.0 {
-            l.rate = 200.0;
-        }
-        if l.duration.as_std().is_zero() && l.steps.is_empty() {
-            l.duration = ConfigDuration(Duration::from_secs(30));
+        // Replay paces from the log, so the load-profile defaults would
+        // only trip the "cannot be combined with replay" validation.
+        if self.replay.is_none() {
+            if l.profile.is_empty() {
+                l.profile = "poisson".into();
+            }
+            if l.rate == 0.0 && l.steps.is_empty() && l.ramp.to == 0.0 {
+                l.rate = 200.0;
+            }
+            if l.duration.as_std().is_zero() && l.steps.is_empty() {
+                l.duration = ConfigDuration(Duration::from_secs(30));
+            }
         }
         if l.workers == 0 {
             l.workers = 10;
@@ -303,6 +376,37 @@ impl Config {
         }
         if l.seed == 0 {
             l.seed = wall_clock_seed();
+        }
+
+        if let Some(r) = &mut self.replay {
+            if r.format.is_empty() {
+                r.format = if r.source.to_ascii_lowercase().ends_with(".har") {
+                    "har"
+                } else {
+                    "json"
+                }
+                .into();
+            }
+            if r.speed == 0.0 {
+                r.speed = 1.0;
+            }
+            if r.copies == 0 {
+                r.copies = 1;
+            }
+            if r.on_unmatched.is_empty() {
+                r.on_unmatched = "skip".into();
+            }
+            let f = &mut r.fields;
+            for (field, default) in [
+                (&mut f.ts, "ts"),
+                (&mut f.method, "method"),
+                (&mut f.path, "path"),
+                (&mut f.operation, "operation"),
+            ] {
+                if field.is_empty() {
+                    *field = default.into();
+                }
+            }
         }
 
         self.checks
@@ -361,34 +465,42 @@ impl Config {
         }
 
         let l = &self.load;
-        match l.profile.as_str() {
-            "constant" | "poisson" => {
-                if l.rate <= 0.0 {
-                    errs.push(format!("load.rate must be > 0 for profile {:?}", l.profile));
-                }
-            }
-            "ramp" => {
-                if l.ramp.from < 0.0 || l.ramp.to <= 0.0 {
-                    errs.push("load.ramp.from/to must be set for profile ramp".into());
-                }
-            }
-            "steps" => {
-                if l.steps.is_empty() {
-                    errs.push("load.steps must be non-empty for profile steps".into());
-                }
-                for (i, s) in l.steps.iter().enumerate() {
-                    if s.rate <= 0.0 || s.duration.as_std().is_zero() {
-                        errs.push(format!("load.steps[{i}]: rate and duration must be > 0"));
+        if let Some(r) = &self.replay {
+            validate_load_for_replay(l, &mut errs);
+            validate_replay(r, &mut errs);
+        } else {
+            match l.profile.as_str() {
+                "constant" | "poisson" => {
+                    if l.rate <= 0.0 {
+                        errs.push(format!("load.rate must be > 0 for profile {:?}", l.profile));
                     }
                 }
+                "ramp" => {
+                    if l.ramp.from < 0.0 || l.ramp.to <= 0.0 {
+                        errs.push("load.ramp.from/to must be set for profile ramp".into());
+                    }
+                }
+                "steps" => {
+                    if l.steps.is_empty() {
+                        errs.push("load.steps must be non-empty for profile steps".into());
+                    }
+                    for (i, s) in l.steps.iter().enumerate() {
+                        if s.rate <= 0.0 || s.duration.as_std().is_zero() {
+                            errs.push(format!("load.steps[{i}]: rate and duration must be > 0"));
+                        }
+                    }
+                }
+                other => errs.push(format!(
+                    "load.profile {other:?} not supported (constant|poisson|ramp|steps)"
+                )),
             }
-            other => errs.push(format!(
-                "load.profile {other:?} not supported (constant|poisson|ramp|steps)"
-            )),
         }
 
         if self.scenarios.is_empty() {
             errs.push("at least one scenario is required".into());
+        }
+        if self.replay.is_some() && self.scenarios.iter().all(|s| s.matcher.is_none()) {
+            errs.push("at least one scenario needs a match rule for replay".into());
         }
         let mut seen = std::collections::HashSet::new();
         for (i, s) in self.scenarios.iter().enumerate() {
@@ -399,8 +511,13 @@ impl Config {
             if !seen.insert(s.name.as_str()) {
                 errs.push(format!("scenarios[{i}]: duplicate name {:?}", s.name));
             }
-            if s.weight <= 0.0 {
+            if self.replay.is_none() && s.weight <= 0.0 {
                 errs.push(format!("scenario {:?}: weight must be > 0", s.name));
+            }
+            if self.replay.is_some() {
+                if let Some(m) = &s.matcher {
+                    validate_match(&s.name, m, t.protocol, &mut errs);
+                }
             }
             match t.protocol {
                 Protocol::Graphql => {
@@ -472,6 +589,92 @@ impl Config {
             }
         }
         errs
+    }
+}
+
+/// Parse an RFC3339 timestamp (any offset) into UTC. Err is the message only.
+pub(crate) fn parse_rfc3339(s: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|d| d.with_timezone(&chrono::Utc))
+        .map_err(|e| format!("{s:?} is not an RFC3339 timestamp: {e}"))
+}
+
+/// Replay paces from the log; any explicit load pacing is a conflict.
+fn validate_load_for_replay(l: &LoadConfig, errs: &mut Vec<String>) {
+    let conflicts = [
+        ("profile", !l.profile.is_empty()),
+        ("rate", l.rate != 0.0),
+        ("duration", !l.duration.as_std().is_zero()),
+        ("warmup", !l.warmup.as_std().is_zero()),
+        ("ramp", l.ramp.from != 0.0 || l.ramp.to != 0.0),
+        ("steps", !l.steps.is_empty()),
+    ];
+    for (field, set) in conflicts {
+        if set {
+            errs.push(format!(
+                "load.{field} cannot be combined with replay (replay paces from the log)"
+            ));
+        }
+    }
+}
+
+fn validate_replay(r: &ReplayConfig, errs: &mut Vec<String>) {
+    if r.source.is_empty() {
+        errs.push("replay.source is required".into());
+    }
+    if !matches!(r.format.as_str(), "json" | "har") {
+        errs.push(format!(
+            "replay.format {:?} not supported (json|har)",
+            r.format
+        ));
+    }
+    if !(r.speed.is_finite() && r.speed > 0.0) {
+        errs.push("replay.speed must be > 0".into());
+    }
+    if !matches!(r.on_unmatched.as_str(), "skip" | "fail") {
+        errs.push(format!(
+            "replay.on_unmatched {:?} not supported (skip|fail)",
+            r.on_unmatched
+        ));
+    }
+    if let Some(w) = &r.window {
+        match (parse_rfc3339(&w.start), parse_rfc3339(&w.end)) {
+            (Ok(start), Ok(end)) => {
+                if start >= end {
+                    errs.push("replay.window.start must be before end".into());
+                }
+            }
+            _ => errs.push("replay.window.start/end must both be RFC3339 timestamps".into()),
+        }
+    }
+}
+
+fn validate_match(name: &str, m: &MatchConfig, protocol: Protocol, errs: &mut Vec<String>) {
+    match protocol {
+        Protocol::Graphql => {
+            if m.operation.is_empty() {
+                errs.push(format!(
+                    "scenario {name:?}: match.operation is required for graphql"
+                ));
+            }
+            if !m.method.is_empty() || !m.path.is_empty() {
+                errs.push(format!(
+                    "scenario {name:?}: match.method/path are REST fields; protocol is graphql"
+                ));
+            }
+        }
+        Protocol::Rest => {
+            if !m.path.starts_with('/') {
+                errs.push(format!(
+                    "scenario {name:?}: match.path is required for rest and must start with /"
+                ));
+            }
+            if !m.operation.is_empty() {
+                errs.push(format!(
+                    "scenario {name:?}: match.operation is a GraphQL field; protocol is rest"
+                ));
+            }
+        }
     }
 }
 
