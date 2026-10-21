@@ -71,6 +71,13 @@ pub struct ReplaySummary {
     pub speed: f64,
     pub copies: u64,
     pub peak_rps: u64,
+    /// Hits actually fired; `None` until the run has executed (so `--validate`
+    /// omits it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fired: Option<u64>,
+    /// Scheduled hits the run never reached (`hits - fired`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dropped: Option<u64>,
 }
 
 impl ReplaySummary {
@@ -93,8 +100,12 @@ impl ReplaySummary {
             format!("{matched} matched, {} unmatched", self.unmatched),
         );
         line("hits", self.hits.to_string());
+        if let Some(fired) = self.fired {
+            let dropped = self.dropped.unwrap_or_else(|| self.hits.saturating_sub(fired));
+            line("fired", format!("{fired} of {} ({dropped} dropped)", self.hits));
+        }
         line("span", self.span.clone());
-        line("speed", format!("{:.1}x", self.speed));
+        line("speed", format!("{}x", self.speed));
         line("copies", self.copies.to_string());
         line("peak", format!("{} rps", self.peak_rps));
         out.push_str("  scenarios:\n");
@@ -169,6 +180,8 @@ pub fn build_replay(cfg: &Config) -> Result<Replay, ReplayError> {
         speed: rc.speed,
         copies: rc.copies,
         peak_rps: schedule.peak_rps(),
+        fired: None,
+        dropped: None,
     };
     Ok(Replay {
         schedule: Arc::new(schedule),
@@ -297,14 +310,43 @@ mod tests {
             speed: 2.0,
             copies: 2,
             peak_rps: 9,
+            fired: Some(12),
+            dropped: Some(2),
         };
         let out = s.render();
         assert!(out.starts_with("replay: prod.jsonl"), "{out}");
         for want in [
-            "parsed", "malformed", "outside window", "unmatched", "14", "2s", "2.0x", "9",
-            "A", "B", "line 3: bad", "GET /x", "(3)",
+            "parsed", "malformed", "outside window", "unmatched", "14", "2s", "2x", "9",
+            "A", "B", "line 3: bad", "GET /x", "(3)", "fired", "12 of 14", "2 dropped",
         ] {
             assert!(out.contains(want), "missing {want:?} in:\n{out}");
         }
+    }
+
+    #[test]
+    fn summary_render_small_speed_not_rounded_away() {
+        let mut s = ReplaySummary {
+            source: "p.jsonl".into(),
+            parsed: 1,
+            malformed: 0,
+            malformed_examples: vec![],
+            filtered: 0,
+            matched: [("A".to_string(), 1)].into(),
+            unmatched: 0,
+            unmatched_top: vec![],
+            hits: 1,
+            span: "1s".into(),
+            speed: 0.04,
+            copies: 1,
+            peak_rps: 1,
+            fired: None,
+            dropped: None,
+        };
+        assert!(s.render().contains("0.04x"), "{}", s.render());
+        // --validate (no fired count) omits the fired line.
+        assert!(!s.render().contains("fired"), "{}", s.render());
+        s.fired = Some(1);
+        s.dropped = Some(0);
+        assert!(s.render().contains("1 of 1 (0 dropped)"), "{}", s.render());
     }
 }

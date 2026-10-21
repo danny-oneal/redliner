@@ -131,6 +131,62 @@ async fn spawn_error_mock() -> Mock {
     Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines }
 }
 
+/// Like `spawn_mock`, but sleeps `delay` before answering each request, so a
+/// single worker can only clear a handful of hits per second.
+async fn spawn_slow_mock(delay: std::time::Duration) -> Mock {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let (h, b, l) = (hits.clone(), bodies.clone(), lines.clone());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else { break };
+            let (h, b, l) = (h.clone(), b.clone(), l.clone());
+            tokio::spawn(async move {
+                let mut data = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    data.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&data).to_string();
+                    if let Some(idx) = text.find("\r\n\r\n") {
+                        let len = text[..idx]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if data.len() >= idx + 4 + len {
+                            h.fetch_add(1, Ordering::SeqCst);
+                            let body = text[idx + 4..].to_string();
+                            let first = text.split("\r\n").next().unwrap_or("").to_string();
+                            l.lock().unwrap().push(first);
+                            let is_post = text.starts_with("POST");
+                            b.lock().unwrap().push(format!("{is_post}|{body}"));
+                            tokio::time::sleep(delay).await;
+                            let payload = "{\"data\":{}}";
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                                payload.len()
+                            );
+                            let _ = sock.write_all(resp.as_bytes()).await;
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines }
+}
+
 fn tempdir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("redliner-e2e-{}-{tag}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
@@ -405,6 +461,49 @@ async fn e2e_replay_validate_prints_schedule_without_firing() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     assert_eq!(mock.hits.load(Ordering::SeqCst), 0);
     assert!(!dir.join("latest").exists());
+}
+
+#[tokio::test]
+async fn e2e_replay_falling_behind_drops_and_fails() {
+    // A log of 5 ops 20ms apart, amplified x10 => 50 scheduled hits inside an
+    // 80ms span. The mock answers in 200ms and max_workers is 1, so a single
+    // worker clears only a handful before the deadline; the rest drop.
+    let mock = spawn_slow_mock(std::time::Duration::from_millis(200)).await;
+    let dir = tempdir("replay-behind");
+    let log = dir.join("log.jsonl");
+    let events: Vec<String> = (0..5)
+        .map(|i| {
+            format!(
+                r#"{{"ts":"2026-10-21T10:00:00.{:03}Z","method":"POST","path":"/graphql","operation":"a"}}"#,
+                i * 20
+            )
+        })
+        .collect();
+    std::fs::write(&log, events.join("\n")).unwrap();
+    let cfg = dir.join("replay.yaml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "target:\n  url: {}\n  timeout: 1s\nload:\n  max_workers: 1\nreplay:\n  source: log.jsonl\n\
+             scenarios:\n  - name: a\n    request:\n      query: \"query a {{ x }}\"\n    match:\n      operation: a\n",
+            mock.url
+        ),
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    let extra = ["--copies", "10", "--out", dir.to_str().unwrap()];
+    assert_eq!(run(args(&cfg, &extra)).await, Exit::SloFailed);
+    let wall = start.elapsed();
+    assert!(wall < std::time::Duration::from_secs(3), "too slow: {wall:?}");
+    let served = mock.hits.load(Ordering::SeqCst);
+    assert!(served < 50, "expected drops, served {served} of 50");
+    let manifest = read_manifest(&dir);
+    assert_eq!(manifest["replay"]["hits"], 50, "manifest: {manifest:#}");
+    assert!(
+        manifest["replay"]["dropped"].as_u64().unwrap_or(0) > 0,
+        "manifest: {manifest:#}"
+    );
+    assert_eq!(manifest["passed"], false, "manifest: {manifest:#}");
 }
 
 #[tokio::test]
