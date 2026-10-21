@@ -18,7 +18,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   aborts on unmatched entries. Request values still come from data pools.
   Malformed log lines are skipped and counted, a replay summary is printed and
   stored in `run_manifest.json`, and every parse/match failure is exit `2`
-  before any request is fired. See `configs/replay-example.yaml`.
+  before any request is fired. Epoch timestamp units (s/ms/µs/ns) are inferred
+  by magnitude; the post-`speed` span is capped at 24h and the schedule at
+  10,000,000 hits (both exit `2`); and a replay that falls behind records
+  `fired`/`dropped`, warns, and exits `1`. See `configs/replay-example.yaml`.
+
+### Changed
+- `volley::Targeter::target` now takes the hit index `seq: u64` (breaking for
+  external `Targeter` implementations).
+- CLI overrides are now applied before defaults and validation, so overridden
+  values are validated, `--seed 0` derives a wall-clock seed, and `--rate 0` /
+  `--duration 0s` fall back to defaults.
 
 ## [0.1.0] - 2026-10-20
 

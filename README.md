@@ -117,7 +117,7 @@ The config file is the source of truth; flags override only what you set.
 | `--replay`    | `replay.source`| replay a JSONL/HAR log instead of a load profile |
 | `--speed`     | `replay.speed` | replay time compression (needs replay)  |
 | `--copies`    | `replay.copies`| concurrent copies of the log (needs replay) |
-| `--strict`    | `replay.on_unmatched` | fail instead of skipping unmatched entries |
+| `--strict`    | `replay.on_unmatched` | fail instead of skipping unmatched entries (needs replay) |
 
 ## Configuration
 
@@ -190,6 +190,7 @@ replay:
 
 scenarios:
   - name: GetProduct
+    weight: 1                            # profile mode only; replay ignores it
     match: { operation: GetProduct }     # REST: { method: GET, path: /products/* }
     request:
       query: "query GetProduct($id:Int!){ product(id:$id){ name } }"

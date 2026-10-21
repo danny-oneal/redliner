@@ -125,9 +125,14 @@ log replays immediately.
 
 **Amplification.** `speed` divides every offset. `copies` overlays N copies of
 the matched log in parallel: copy *k* is rotated by *k*·span/N inside the
-original span (offsets that run past the end wrap to the start), so the
-traffic shape is preserved and volume is N× over the *same* duration. Use
-`speed` to compress time and `copies` to multiply load; they compose.
+original span (offsets that run past the end wrap to the start). This
+multiplies *total* and *average* volume by N over the *same* duration, but
+because the copies are staggered rather than stacked, the busiest instants are
+spread out: the **peak rate is not multiplied**. The `peak` value in the replay
+summary reports the effective peak after this rotation. Use `speed` to compress
+time and `copies` to multiply average load; they compose. The schedule is
+capped at 10,000,000 total hits (after `copies`); a larger one is a config
+error (exit `2`), so narrow the window or lower `copies`.
 
 **`on_unmatched`.** Entries no scenario matches are counted and, by default,
 skipped. `fail` (or `--strict`) aborts the run with exit `2`, before any
@@ -141,7 +146,7 @@ dot path of each field in the object (same syntax as harvest `extract`:
 
 | `fields` key | default     | required | meaning |
 | ------------ | ----------- | -------- | ------- |
-| `ts`         | `ts`        | yes      | when the request happened. An RFC3339 string (`"2026-10-20T14:00:00.250Z"`, any UTC offset) or a number of epoch **seconds** (fractions allowed: `1760968800.25`) |
+| `ts`         | `ts`        | yes      | when the request happened. An RFC3339 string (`"2026-10-20T14:00:00.250Z"`, any UTC offset) or an epoch number whose **unit is inferred from magnitude**: `>= 1e17` is nanoseconds, `>= 1e14` microseconds, `>= 1e11` milliseconds, otherwise seconds (fractions allowed: `1760968800.25`) |
 | `method`     | `method`    | yes      | HTTP method (case-insensitive) |
 | `path`       | `path`      | yes      | request path or URL; the scheme, host, query string, and fragment are stripped, and the rest must start with `/` |
 | `operation`  | `operation` | no       | GraphQL operation name; absent or non-string means "no operation" |
@@ -162,26 +167,45 @@ using `startedDateTime` (RFC3339), `request.method`, and `request.url`. For
 GraphQL, the operation is `operationName` in the JSON body at
 `request.postData.text`, when present. `replay.fields` is ignored for HAR. A
 document without `log.entries` fails the run; a bad individual entry is
-counted as malformed like a bad JSONL line.
+counted as malformed like a bad JSONL line. In error and malformed messages,
+"line N" for a HAR log is the 1-based index of the entry in `log.entries`, not
+a physical file line.
 
 ### Validation and what combines with replay
 
 Replay needs at least one scenario with a `match`. Every parse, match, and
 schedule failure is exit `2` and happens **before any request is fired**.
 The run also exits `2` when nothing is left to send (every entry malformed,
-outside the window, or unmatched); the error lists the counts.
+outside the window, or unmatched); the error lists the counts. The effective
+span after `speed` must be at most 24h — a larger one (usually a wrong
+timestamp unit or an outlier) is also exit `2`, so check the units, narrow
+`replay.window`, or raise `--speed`.
 
 Replay paces from the log, so `load.profile`, `rate`, `duration`, `warmup`,
 `ramp`, and `steps` are **rejected** when replay is on (the error names the
-field). `load.workers`, `load.max_workers`, and `load.seed` still apply: the
-same config, log, and `seed` give the same schedule and the same request
-values for every request, regardless of concurrency.
+field); the `--rate`, `--duration`, and `--warmup` flags map onto those fields
+and are rejected the same way. `load.workers`, `load.max_workers`, and
+`load.seed` still apply: the same config, log, and `seed` give the same
+schedule and the same request values for every request, regardless of
+concurrency.
+
+The `--speed`, `--copies`, and `--strict` flags only tune an existing replay
+run; passing any of them without `--replay <log>` or a `replay` block in the
+config is a single error (exit `2`): `--speed, --copies and --strict need
+--replay <log> or a replay block in the config`.
+
+**Keeping up.** Replay fires at the log's pace through at most `load.max_workers`
+concurrent requests. If the target (or the load generator) cannot keep up, the
+run can reach its deadline with scheduled hits still unfired. Those dropped hits
+are not silently ignored: the run prints a warning, records `fired`/`dropped` in
+the replay summary and `run_manifest.json`, and **exits `1`** (even with no SLOs
+enforced). Raise `load.max_workers` if the load generator is the bottleneck.
 
 ### Summary
 
 `--validate` reads and matches the log without firing anything and prints this
-block. A real run prints a one-line banner first (source, hits, speed, copies,
-seed), then repeats the block in the final summary and stores it under
+block. A real run prints a one-line banner first (source, hits, span, speed,
+copies, seed), then repeats the block in the final summary and stores it under
 `replay` in `run_manifest.json`:
 
 ```
@@ -190,7 +214,7 @@ replay: configs/replay-sample.jsonl
   matching      : 16 matched, 4 unmatched
   hits          : 16
   span          : 4.8s
-  speed         : 1.0x
+  speed         : 1x
   copies        : 1
   peak          : 4 rps
   scenarios:
@@ -203,7 +227,9 @@ replay: configs/replay-sample.jsonl
 `hits` is what will fire (after `copies`), `span` the replay duration (after
 `speed`), and `peak` the most hits in any one-second window. Matched counts
 are per scenario before `copies`. Results are attributed to scenarios by name
-in the per-operation report, as in a profile run.
+in the per-operation report, as in a profile run. After a real run the block
+and manifest also carry a `fired` line (`fired : 14 of 16 (2 dropped)`) when
+the run could not keep up — see **Keeping up** above.
 
 ## `data`
 
