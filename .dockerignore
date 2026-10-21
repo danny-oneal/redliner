@@ -1,0 +1,7 @@
+# Keep the build context small and free of artifacts/secrets.
+target/
+reports/
+.git/
+docs/
+deploy/
+*.tar
