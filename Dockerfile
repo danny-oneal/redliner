@@ -3,7 +3,7 @@
 # cargo-chef caches dependency compilation; the runtime is a distroless,
 # nonroot image (glibc + CA certs, no shell or package manager).
 
-FROM rust:1.88-slim-bookworm AS chef
+FROM rust:1.99-slim-bookworm AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /app
 
