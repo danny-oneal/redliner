@@ -242,3 +242,41 @@ and JUnit output are unchanged.
 - **`match` ambiguity:** if two scenarios match the same event, validation
   rejects the config at load time (first-match-wins is avoided to keep replays
   unambiguous).
+
+## Refinements made during planning
+
+Checking the design against the code turned up the changes below. They
+**supersede** the sections above wherever the two differ. The implementation
+plan is `docs/superpowers/plans/2026-10-21-production-log-replay.md`.
+
+1. **`copies` rotate within the span; they don't run back to back.** If copy
+   *k* were offset by `k × trace_span`, the copies would play one after another
+   and the rate would never rise. Instead, copy *k* is shifted by
+   `k × span / copies` and wraps inside `[0, span]`. Every copy runs in
+   parallel, so volume is `copies ×` and the run still lasts one span.
+2. **Requests are encoded when each hit fires.** Nothing is encoded ahead of
+   time. Each hit gets a ChaCha8 rng seeded with `load.seed` on stream `seq`,
+   so results are identical across runs regardless of concurrency. The schedule
+   keeps only `(offset, scenario)` per hit, which keeps large logs cheap.
+3. **Ambiguous matches are caught during matching.** The check runs before any
+   request fires, and `--validate` runs it too. Globs can't be checked for
+   overlap from the YAML alone.
+4. **No warning about weights.** In profile mode `match` blocks are ignored,
+   and in replay mode weights are ignored, so one config file works for both.
+   Neither mode warns about the other's fields.
+5. **Formats are a function per format.** `read_trace` matches on `format` and
+   calls a function for JSONL or HAR; there's no `TraceReader` trait. Adding a
+   streaming reader later only changes `read_trace`.
+6. **JSONL field paths are configurable.** `replay.fields` takes dot paths
+   (reusing `data::extract_path`) for `ts`, `method`, `path` and `operation`.
+   Timestamps can be RFC3339 strings or epoch seconds (fractions allowed).
+7. **The replay summary goes in `run_manifest.json`** under the `replay` key,
+   and in the text summary. It doesn't go in `metrics.json`.
+8. **CLI overrides are applied before defaults and validation.** That way
+   `--replay` can switch modes and still gets validated. A relative `--replay`
+   path resolves against the current directory, not the config directory.
+9. **Bad input is counted or rejected, never silently ignored.** Malformed log
+   lines are skipped, counted and shown in the summary. A replay left with no
+   events exits `2`. Setting any `load.*` pacing field (`profile`, `rate`,
+   `duration`, `warmup`, `ramp`, `steps`) alongside `replay` is a validation
+   error.
