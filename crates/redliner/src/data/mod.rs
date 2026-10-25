@@ -185,25 +185,27 @@ fn kind(v: &Value) -> &'static str {
 }
 
 /// Substitutes every `{{pool}}` placeholder in `s` with a fresh sample;
-/// embedded values are stringified.
+/// embedded values are stringified. Sampled values are inserted verbatim and
+/// never rescanned, so a value containing `{{` is data, not a placeholder.
 pub fn render_string(s: &str, pools: &Pools, rng: &mut ChaCha8Rng) -> Result<String, EncodeError> {
-    let mut s = s.to_string();
-    loop {
-        let Some(start) = s.find("{{") else {
-            return Ok(s);
-        };
-        let Some(end) = s[start..].find("}}") else {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find("{{") {
+        let Some(end) = rest[start..].find("}}") else {
             return Err(EncodeError::BadTemplate(format!(
                 "unterminated {{{{ in {s:?}"
             )));
         };
-        let name = s[start + 2..start + end].trim();
+        let name = rest[start + 2..start + end].trim();
         let pool = pools
             .get(name)
             .ok_or_else(|| EncodeError::UnknownPool(name.to_string()))?;
-        let rendered = stringify(&pool.sample(rng));
-        s = format!("{}{}{}", &s[..start], rendered, &s[start + end + 2..]);
+        out.push_str(&rest[..start]);
+        out.push_str(&stringify(&pool.sample(rng)));
+        rest = &rest[start + end + 2..];
     }
+    out.push_str(rest);
+    Ok(out)
 }
 
 /// Substitutes placeholders inside an arbitrary JSON value (GraphQL
@@ -286,6 +288,30 @@ mod tests {
     fn render_string_unterminated() {
         let e = render_string("a {{ids", &ids(), &mut rng()).unwrap_err();
         assert!(matches!(e, EncodeError::BadTemplate(_)));
+    }
+
+    fn named(value: &str) -> Pools {
+        let mut p = Pools::new();
+        p.insert("name".into(), Pool::List(vec![json!(value)]));
+        p
+    }
+
+    #[test]
+    fn render_string_does_not_reparse_sampled_placeholder() {
+        let out = render_string("/u/{{name}}", &named("{{other}}"), &mut rng()).unwrap();
+        assert_eq!(out, "/u/{{other}}");
+    }
+
+    #[test]
+    fn render_string_does_not_reparse_sampled_braces() {
+        let out = render_string("/u/{{name}}/x", &named("a{{b"), &mut rng()).unwrap();
+        assert_eq!(out, "/u/a{{b/x");
+    }
+
+    #[test]
+    fn render_string_fills_every_placeholder() {
+        let out = render_string("{{ids}}-{{ ids }}/{{ids}}", &ids(), &mut rng()).unwrap();
+        assert_eq!(out, "5-5/5");
     }
 
     #[test]
