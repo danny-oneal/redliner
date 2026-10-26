@@ -31,6 +31,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   values are validated, `--seed 0` derives a wall-clock seed, and `--rate 0` /
   `--duration 0s` fall back to defaults.
 
+### Fixed
+- Templating no longer re-parses sampled values: a pool value containing `{{`
+  (e.g. harvested or file-pool data) is inserted verbatim instead of failing
+  the request as an unknown pool or bad template, and a value that references
+  its own pool no longer hangs the run.
+
 ## [0.1.0] - 2026-10-20
 
 Initial release — a from-scratch Rust port of an internal Go/Vegeta harness.
