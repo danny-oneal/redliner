@@ -108,14 +108,17 @@ pub struct DataConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct PoolConfig {
-    /// list | file | range
+    /// list | file | range | uuid | sequence | timestamp
     #[serde(rename = "type")]
     pub pool_type: String,
     pub values: Vec<serde_json::Value>,
     pub path: String,
     pub min: i64,
     pub max: i64,
-    /// For file pools: string (default) | int.
+    /// For sequence pools: the first value (default 1).
+    pub start: Option<i64>,
+    /// For file pools: string (default) | int. For timestamp pools:
+    /// rfc3339 (default) | unix | unix_ms.
     #[serde(rename = "as")]
     pub as_type: String,
 }
@@ -584,8 +587,18 @@ impl Config {
                         errs.push(format!("pool {name:?}: range max < min"));
                     }
                 }
+                "uuid" | "sequence" => {}
+                "timestamp" => {
+                    if !matches!(p.as_type.as_str(), "" | "rfc3339" | "unix" | "unix_ms") {
+                        errs.push(format!(
+                            "pool {name:?}: timestamp as {:?} not supported (rfc3339|unix|unix_ms)",
+                            p.as_type
+                        ));
+                    }
+                }
                 other => errs.push(format!(
-                    "pool {name:?}: type {other:?} not supported (list|file|range)"
+                    "pool {name:?}: type {other:?} not supported \
+                     (list|file|range|uuid|sequence|timestamp)"
                 )),
             }
         }

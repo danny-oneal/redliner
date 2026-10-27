@@ -255,10 +255,33 @@ fn pools_and_harvest_validated() {
     assert!(t.contains("pool \"a\": list pool needs values"));
     assert!(t.contains("pool \"b\": file pool needs path"));
     assert!(t.contains("pool \"c\": range max < min"));
-    assert!(t.contains("pool \"d\": type \"nope\" not supported (list|file|range)"));
+    assert!(t.contains(
+        "pool \"d\": type \"nope\" not supported (list|file|range|uuid|sequence|timestamp)"
+    ));
     assert!(t.contains("data.harvest[0]: extract map is required"));
     assert!(t
         .contains("data.harvest[0]: request.query or request.query_file is required for graphql"));
+}
+
+#[test]
+fn generator_pools_need_no_fields() {
+    let y = format!(
+        "{GQL_HEAD}data:\n  pools:\n    key: {{type: uuid}}\n    n: {{type: sequence, start: 100}}\n    \
+         t: {{type: timestamp}}\n    ts: {{type: timestamp, as: unix_ms}}\n{ONE_GQL}"
+    );
+    let c = load_str(&y).unwrap();
+    assert_eq!(c.data.pools["n"].start, Some(100));
+    assert_eq!(c.data.pools["ts"].as_type, "unix_ms");
+}
+
+#[test]
+fn timestamp_pool_format_validated() {
+    let y = format!("{GQL_HEAD}data:\n  pools:\n    t: {{type: timestamp, as: iso}}\n{ONE_GQL}");
+    let t = err_text(load_str(&y));
+    assert!(
+        t.contains("pool \"t\": timestamp as \"iso\" not supported (rfc3339|unix|unix_ms)"),
+        "{t}"
+    );
 }
 
 #[test]

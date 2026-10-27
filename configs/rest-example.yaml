@@ -24,6 +24,7 @@ data:
   pools:
     product_ids: { type: range, min: 1, max: 500 }
     quantities:  { type: list, values: [1, 2, 3] }
+    order_refs:  { type: uuid }     # a fresh, seeded UUID per draw
   harvest:
     # Seed SKUs from the live API so lookups always resolve.
     - request:
@@ -50,7 +51,7 @@ scenarios:
     request:
       method: POST
       path: /orders
-      body: '{"productId": {{product_ids}}, "quantity": {{quantities}}}'
+      body: '{"clientRef": "{{order_refs}}", "productId": {{product_ids}}, "quantity": {{quantities}}}'
 
 checks:
   status: [200, 201]                # anything else is a failure

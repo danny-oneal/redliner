@@ -2,6 +2,9 @@
 //! (port of the Go `data.go`).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
@@ -49,6 +52,20 @@ pub enum DataError {
 pub enum Pool {
     List(Vec<Value>),
     Range { min: i64, max: i64 },
+    /// A random (v4) UUID per draw, from the seeded RNG.
+    Uuid,
+    /// The next integer per draw. Clones share the counter.
+    Sequence(Arc<AtomicI64>),
+    /// The wall-clock time of the draw.
+    Timestamp(TimeFormat),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeFormat {
+    /// `2026-01-02T03:04:05.678Z`
+    Rfc3339,
+    Unix,
+    UnixMs,
 }
 
 impl Pool {
@@ -58,7 +75,37 @@ impl Pool {
             Pool::List(values) if values.is_empty() => Value::Null,
             Pool::List(values) => values[rng.random_range(0..values.len())].clone(),
             Pool::Range { min, max } => Value::from(rng.random_range(*min..=*max)),
+            Pool::Uuid => Value::String(uuid_v4(rng)),
+            Pool::Sequence(next) => Value::from(next.fetch_add(1, Ordering::Relaxed)),
+            Pool::Timestamp(format) => timestamp(*format, SystemTime::now()),
         }
+    }
+}
+
+/// RFC 9562 version-4 layout: random bits with the version and variant set.
+fn uuid_v4(rng: &mut ChaCha8Rng) -> String {
+    let mut b: [u8; 16] = rng.random();
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let mut s = String::with_capacity(36);
+    for (i, byte) in b.iter().enumerate() {
+        if matches!(i, 4 | 6 | 8 | 10) {
+            s.push('-');
+        }
+        s.push_str(&format!("{byte:02x}"));
+    }
+    s
+}
+
+fn timestamp(format: TimeFormat, now: SystemTime) -> Value {
+    let since = now.duration_since(UNIX_EPOCH).unwrap_or_default();
+    match format {
+        TimeFormat::Unix => Value::from(since.as_secs()),
+        TimeFormat::UnixMs => Value::from(u64::try_from(since.as_millis()).unwrap_or(u64::MAX)),
+        TimeFormat::Rfc3339 => Value::String(
+            chrono::DateTime::<chrono::Utc>::from(now)
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        ),
     }
 }
 
@@ -88,6 +135,21 @@ pub fn build_pools(cfg: &DataConfig) -> Result<Pools, DataError> {
                     source: Box::new(e),
                 })?;
                 pools.insert(name.clone(), Pool::List(vals));
+            }
+            "uuid" => {
+                pools.insert(name.clone(), Pool::Uuid);
+            }
+            "sequence" => {
+                let start = AtomicI64::new(pc.start.unwrap_or(1));
+                pools.insert(name.clone(), Pool::Sequence(Arc::new(start)));
+            }
+            "timestamp" => {
+                let format = match pc.as_type.as_str() {
+                    "unix" => TimeFormat::Unix,
+                    "unix_ms" => TimeFormat::UnixMs,
+                    _ => TimeFormat::Rfc3339,
+                };
+                pools.insert(name.clone(), Pool::Timestamp(format));
             }
             _ => {}
         }
@@ -323,6 +385,118 @@ mod tests {
             let n = v.as_i64().expect("integer value");
             assert!((1..=3).contains(&n));
         }
+    }
+
+    fn pool(cfg: PoolConfig) -> Pool {
+        let mut data = DataConfig::default();
+        data.pools.insert("p".into(), cfg);
+        build_pools(&data).unwrap().remove("p").expect("pool built")
+    }
+
+    fn typed(pool_type: &str) -> PoolConfig {
+        PoolConfig {
+            pool_type: pool_type.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn uuid_pool_yields_distinct_v4_uuids() {
+        let p = pool(typed("uuid"));
+        let mut r = rng();
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let v = p.sample(&mut r);
+            let s = v.as_str().expect("uuid is a string");
+            assert_eq!(s.len(), 36, "{s}");
+            for (i, c) in s.char_indices() {
+                match i {
+                    8 | 13 | 18 | 23 => assert_eq!(c, '-', "{s}"),
+                    14 => assert_eq!(c, '4', "version nibble: {s}"),
+                    19 => assert!("89ab".contains(c), "variant nibble: {s}"),
+                    _ => assert!(c.is_ascii_hexdigit() && !c.is_ascii_uppercase(), "{s}"),
+                }
+            }
+            assert!(seen.insert(s.to_string()), "duplicate {s}");
+        }
+    }
+
+    #[test]
+    fn uuid_pool_is_reproducible_from_the_seed() {
+        let p = pool(typed("uuid"));
+        let draw = |seed| {
+            let mut r = ChaCha8Rng::seed_from_u64(seed);
+            (0..5).map(|_| p.sample(&mut r)).collect::<Vec<_>>()
+        };
+        assert_eq!(draw(7), draw(7));
+        assert_ne!(draw(7), draw(8));
+    }
+
+    #[test]
+    fn sequence_pool_counts_up_from_start() {
+        let p = pool(PoolConfig {
+            start: Some(10),
+            ..typed("sequence")
+        });
+        let mut r = rng();
+        let got: Vec<Value> = (0..3).map(|_| p.sample(&mut r)).collect();
+        assert_eq!(got, vec![json!(10), json!(11), json!(12)]);
+        assert!(got[0].is_i64(), "native integer");
+    }
+
+    #[test]
+    fn sequence_pool_starts_at_one_by_default() {
+        let p = pool(typed("sequence"));
+        assert_eq!(p.sample(&mut rng()), json!(1));
+        assert_eq!(p.sample(&mut rng()), json!(2));
+    }
+
+    #[test]
+    fn every_placeholder_draws_the_next_sequence_value() {
+        let mut pools = Pools::new();
+        pools.insert("n".into(), pool(typed("sequence")));
+        let out = render_string("{{n}}-{{n}}", &pools, &mut rng()).unwrap();
+        assert_eq!(out, "1-2");
+        let out = render_value(&json!({"n": "{{n}}"}), &pools, &mut rng()).unwrap();
+        assert_eq!(out, json!({"n": 3}));
+    }
+
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+    }
+
+    #[test]
+    fn timestamp_pool_unix_and_unix_ms() {
+        let secs = pool(PoolConfig {
+            as_type: "unix".into(),
+            ..typed("timestamp")
+        });
+        let ms = pool(PoolConfig {
+            as_type: "unix_ms".into(),
+            ..typed("timestamp")
+        });
+        let before = now_ms();
+        let s = secs.sample(&mut rng()).as_i64().expect("unix is an integer");
+        let m = ms.sample(&mut rng()).as_i64().expect("unix_ms is an integer");
+        let after = now_ms();
+        assert!((before / 1000..=after / 1000).contains(&s), "{s}");
+        assert!((before..=after).contains(&m), "{m}");
+    }
+
+    #[test]
+    fn timestamp_pool_defaults_to_rfc3339_millis() {
+        let p = pool(typed("timestamp"));
+        let before = now_ms();
+        let v = p.sample(&mut rng());
+        let after = now_ms();
+        let s = v.as_str().expect("rfc3339 is a string");
+        assert_eq!(s.len(), "2026-01-02T03:04:05.678Z".len(), "{s}");
+        assert!(s.ends_with('Z'), "{s}");
+        let t = crate::config::parse_rfc3339(s).unwrap().timestamp_millis();
+        assert!((before..=after).contains(&t), "{s}");
     }
 
     #[test]

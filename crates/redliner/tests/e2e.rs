@@ -748,3 +748,70 @@ async fn e2e_slo_flags_pass_when_met() {
     assert_eq!(manifest["passed"], true);
     assert_eq!(manifest["slo_results"].as_array().map(Vec::len), Some(2));
 }
+
+/// A REST config whose POST body draws from uuid and sequence pools.
+fn write_generator_cfg(dir: &std::path::Path, base: &str) -> std::path::PathBuf {
+    let p = dir.join("cfg.yaml");
+    std::fs::write(
+        &p,
+        format!(
+            "target:\n  url: {base}\n  protocol: rest\nload:\n  profile: constant\n  rate: 50\n  duration: 1s\n  seed: 42\n\
+             data:\n  pools:\n    key: {{type: uuid}}\n    n: {{type: sequence, start: 100}}\n\
+             scenarios:\n  - name: create\n    weight: 1\n    request:\n      method: POST\n      path: /orders\n      \
+             body: '{{\"key\":\"{{{{key}}}}\",\"n\":{{{{n}}}}}}'\n"
+        ),
+    )
+    .unwrap();
+    p
+}
+
+/// The decoded POST bodies the mock saw.
+fn json_bodies(mock: &Mock) -> Vec<serde_json::Value> {
+    mock.bodies
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|b| serde_json::from_str(b.strip_prefix("true|").expect("a POST")).expect("JSON body"))
+        .collect()
+}
+
+#[tokio::test]
+async fn e2e_generator_pools_give_unique_values() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("gen");
+    let cfg = write_generator_cfg(&dir, &origin(&mock));
+    let out = dir.to_str().unwrap();
+    assert_eq!(run(args(&cfg, &["--out", out, "--live-stats", "0s"])).await, Exit::Ok);
+
+    let bodies = json_bodies(&mock);
+    assert!(bodies.len() > 10, "saw {} requests", bodies.len());
+    let keys: std::collections::HashSet<&str> =
+        bodies.iter().map(|b| b["key"].as_str().expect("key is a string")).collect();
+    assert_eq!(keys.len(), bodies.len(), "every key is unique");
+    let mut ns: Vec<i64> = bodies.iter().map(|b| b["n"].as_i64().expect("n is a number")).collect();
+    ns.sort_unstable();
+    let want: Vec<i64> = (100..100 + bodies.len() as i64).collect();
+    assert_eq!(ns, want, "one sequence value per request, from start");
+}
+
+#[tokio::test]
+async fn e2e_uuid_pool_repeats_with_the_same_seed() {
+    let keys = |mock: &Mock| -> std::collections::BTreeSet<String> {
+        json_bodies(mock)
+            .iter()
+            .map(|b| b["key"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (a, b) = (spawn_mock().await, spawn_mock().await);
+    let (da, db) = (tempdir("gen-seed-a"), tempdir("gen-seed-b"));
+    for (mock, dir) in [(&a, &da), (&b, &db)] {
+        let cfg = write_generator_cfg(dir, &origin(mock));
+        let out = dir.to_str().unwrap();
+        assert_eq!(run(args(&cfg, &["--out", out, "--live-stats", "0s"])).await, Exit::Ok);
+    }
+    let (ka, kb) = (keys(&a), keys(&b));
+    let common = ka.intersection(&kb).count();
+    // Same seed, same draw order: the runs share every key both fired (the
+    // last hit or two can fall either side of the 1s cut-off).
+    assert!(common + 2 >= ka.len().min(kb.len()) && common > 10, "{common} of {}", ka.len());
+}
