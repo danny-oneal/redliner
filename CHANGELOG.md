@@ -34,7 +34,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reports. Library users get `redliner::run_with_interrupt` and
   `volley::Attacker::attack_until`, which stops on a `watch` flag even mid-wait.
 
+- **Static Linux binaries and an install script** — releases now include
+  static musl builds for x86_64 and arm64 Linux, and every release asset has a
+  `.sha256` checksum. `scripts/install.sh` picks the right asset, verifies the
+  checksum (and refuses a release without one), and installs to
+  `~/.local/bin`.
+
 ### Changed
+- Release builds use fat LTO, one codegen unit and stripped symbols, and the
+  binary uses mimalloc. At 5000 rps against a local server the load
+  generator's own CPU per request is ~28% lower, and the Linux binary shrinks
+  from 10.9 MB to ~6 MB.
 - `volley::Targeter::target` now takes the hit index `seq: u64` (breaking for
   external `Targeter` implementations).
 - CLI overrides are now applied before defaults and validation, so overridden

@@ -3,6 +3,13 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Build (but don't publish) when the release pipeline itself changes, so a
+  # broken target shows up in review instead of on the next tag.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/install.sh
+      - Cargo.toml
 
 permissions:
   contents: write
@@ -11,13 +18,20 @@ jobs:
   build:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    env:
+      # The tag on a release; on a PR, a placeholder (the ref name has a slash).
+      VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'ci' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          # Static binaries: run on any distro, in scratch/distroless images,
+          # and on arm64 K3s nodes. musl-gcc builds ring and mimalloc.
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, musl: true }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, musl: true }
           - { os: macos-latest, target: aarch64-apple-darwin }
-          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin, cross: true }
           - { os: windows-latest, target: x86_64-pc-windows-msvc }
     steps:
       - uses: actions/checkout@v4
@@ -27,29 +41,57 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install musl-tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release -p redliner --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          if [ "${{ matrix.musl }}" = "true" ]; then
+            target_env=$(echo "${{ matrix.target }}" | tr '-' '_')
+            export "CC_${target_env}=musl-gcc"
+          fi
+          cargo build --release --locked -p redliner --target ${{ matrix.target }}
+
+      - name: Smoke test
+        if: ${{ !matrix.cross }}
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/redliner"
+          "$bin" --version
+          if [ "${{ matrix.musl }}" = "true" ]; then
+            file "$bin" | tee /dev/stderr | grep -q "statically linked\|static-pie linked"
+          fi
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          staging="redliner-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          staging="redliner-${VERSION}-${{ matrix.target }}"
           tar -czf "${staging}.tar.gz" -C "target/${{ matrix.target }}/release" redliner
+          shasum -a 256 "${staging}.tar.gz" > "${staging}.tar.gz.sha256"
           echo "ASSET=${staging}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $staging = "redliner-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          $staging = "redliner-$env:VERSION-${{ matrix.target }}"
           Compress-Archive -Path "target/${{ matrix.target }}/release/redliner.exe" -DestinationPath "$staging.zip"
+          $hash = (Get-FileHash "$staging.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $staging.zip" | Out-File -FilePath "$staging.zip.sha256" -Encoding ascii -NoNewline
           "ASSET=$staging.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ASSET }}
+          files: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256

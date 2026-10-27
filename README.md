@@ -46,7 +46,21 @@ binary (`redliner`).
 
 ## Install
 
-Redliner needs a **Rust toolchain ≥ 1.88** ([rustup](https://rustup.rs)).
+**Prebuilt binary** (Linux x86_64/arm64, macOS). The script picks the release
+asset for your platform, checks it against the release's SHA-256 checksum, and
+installs it to `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danny-oneal/redliner/main/scripts/install.sh | sh
+```
+
+Set `REDLINER_VERSION=v0.2.0` to pin a release or `REDLINER_INSTALL_DIR` to
+install elsewhere. The Linux binaries are static (musl), so they run on any
+distro and in `scratch`/distroless images. Windows builds are attached to each
+[release](https://github.com/danny-oneal/redliner/releases) as a `.zip` with a
+`.sha256`.
+
+**From source** needs a **Rust toolchain ≥ 1.88** ([rustup](https://rustup.rs)).
 
 ```bash
 # From a local checkout (also: `make install`):

@@ -74,4 +74,8 @@ starts with a test that reproduces the bug.
 
 Versions follow [SemVer](https://semver.org). To cut a release, bump the crate
 versions, move the *Unreleased* changelog section under the new version with a
-date, and tag `vX.Y.Z`.
+date, and tag `vX.Y.Z`. The tag triggers `.github/workflows/release.yml`,
+which builds every target, smoke-tests it, and attaches each archive with a
+`.sha256` checksum (which `scripts/install.sh` requires). A PR that touches the
+workflow, the install script or the workspace `Cargo.toml` runs the same builds
+without publishing; `make test-install` tests the script locally.
