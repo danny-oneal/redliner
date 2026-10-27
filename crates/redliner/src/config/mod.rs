@@ -292,10 +292,21 @@ pub fn load_config_file_with(
         path: path.to_path_buf(),
         source,
     })?;
-    let mut cfg: Config = serde_yaml_ng::from_str(&raw).map_err(|source| ConfigError::Parse {
+    let cfg: Config = serde_yaml_ng::from_str(&raw).map_err(|source| ConfigError::Parse {
         path: path.to_path_buf(),
         source,
     })?;
+    load_config_with(path, cfg, overrides)
+}
+
+/// The rest of [`load_config_file_with`] for an already-decoded config,
+/// e.g. one built from CLI flags. `path` names it in errors and anchors
+/// relative file paths.
+pub fn load_config_with(
+    path: &Path,
+    mut cfg: Config,
+    overrides: impl FnOnce(&mut Config),
+) -> Result<Config, ConfigError> {
     overrides(&mut cfg);
     cfg.apply_defaults();
     let base = path.parent().unwrap_or_else(|| Path::new(""));

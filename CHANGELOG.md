@@ -27,6 +27,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   running request total plus the rate, success, p95 and failures of the last
   window. Set the interval with `report.live_stats` or `--live-stats` (`0s`
   turns it off; anything else must be at least `100ms`).
+- **Zero-config runs** — `redliner --url https://host/path?q=1` benchmarks one
+  endpoint with no config file: the path and query become a single REST
+  scenario and everything else takes its default. `--method`, `--body` and
+  `-H`/`--header` describe the request, and the usual flags (`--rate`,
+  `--duration`, ...) still apply. A `redliner.yaml` in the current directory
+  still takes precedence, `--header` also adds to a config file's
+  `target.headers`, and running with neither a config nor `--url` now says so
+  in one line instead of failing to read `redliner.yaml`.
 - **Graceful Ctrl-C** — the first Ctrl-C stops firing, lets in-flight requests
   finish, and writes the full report directory from the partial results
   (`"aborted": true` in `run_manifest.json`, an `INTERRUPTED` line in the

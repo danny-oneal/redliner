@@ -76,6 +76,13 @@ installing, use `cargo run -p redliner -- <args>`.
 ## Quick start
 
 ```bash
+# One endpoint, no config file: 200 rps for 30s, reports in ./reports
+redliner --url https://api.example.com/health
+
+# ...with a method, body, headers and your own rate
+redliner --url https://api.example.com/orders --method POST --body '{"sku":"A1"}' \
+  -H 'Authorization: Bearer abc' --rate 50 --duration 1m
+
 # GraphQL catalog server
 redliner --config configs/graphql-catalog.yaml
 
@@ -91,6 +98,13 @@ redliner --config configs/rest-example.yaml --rate 500 --duration 2m
 # Replay a production log at 2x speed (see "Production-log replay" below)
 redliner --config configs/replay-example.yaml --replay prod.jsonl --speed 2
 ```
+
+**No config file.** Without `--config`, Redliner reads `redliner.yaml` from the
+current directory. If there's none, `--url` alone is enough: the URL's path and
+query become a single REST scenario (named e.g. `GET /health`), and every other
+setting takes its default (`poisson` at 200 rps for 30s, 2xx/3xx counts as
+success, no SLOs). `--rate`, `--duration`, `--seed` and the other flags still
+apply. Credentials in the URL are rejected; pass them with `-H` instead.
 
 **Exit codes:** `0` run passed · `1` an SLO was violated · `2` config or
 runtime error · `130` interrupted.
@@ -132,11 +146,16 @@ The workspace has two crates:
 ## CLI
 
 The config file is the source of truth; flags override only what you set.
+With no config file, `--url` (plus `--method`, `--body` and `-H`) describes the
+one request to benchmark.
 
 | flag          | overrides      | notes                                   |
 | ------------- | -------------- | --------------------------------------- |
-| `--config`    | —              | scenario file (default `redliner.yaml`) |
-| `--url`       | `target.url`   |                                         |
+| `--config`    | —              | scenario file (default `redliner.yaml` if present) |
+| `--url`       | `target.url`   | with no config file, the endpoint to benchmark |
+| `--method`    | —              | method of the `--url` request (no config file only; default `GET`) |
+| `--body`      | —              | body of the `--url` request (no config file only) |
+| `-H`, `--header` | `target.headers` | `"Name: value"`, repeatable; adds to the file's headers |
 | `--rate`      | `load.rate`    | requests per second                     |
 | `--duration`  | `load.duration`| Go-style duration, e.g. `30s`, `2m`     |
 | `--warmup`    | `load.warmup`  | Go-style duration                       |
