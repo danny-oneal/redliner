@@ -1,3 +1,11 @@
 [workspace]
 resolver = "2"
 members = ["crates/volley", "crates/redliner"]
+
+# A load generator's own overhead is part of every measurement, so release
+# builds trade compile time for a faster, smaller binary. Panics still unwind:
+# a panicking worker task must not take the partial report down with it.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
