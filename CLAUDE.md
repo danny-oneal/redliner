@@ -18,7 +18,7 @@ cargo test -p redliner --lib replay::schedule     # unit tests under a module pa
 cargo test -p redliner --test e2e <name> -- --exact --nocapture
 ```
 
-CI runs `make lint`, `make test`, `cargo +1.88 check` (MSRV), `cargo package --workspace` (both crates publishable) and `make test-install` (shellcheck + `scripts/install.sh` against a fake release); all must pass. Clippy warnings are errors. MSRV is 1.88, edition 2021; bump `rust-version` and the CI msrv job together.
+CI runs `make lint`, `make test`, `cargo +1.88 check` (MSRV), `cargo package --workspace` (both crates publishable) `make test-install` (shellcheck + `scripts/install.sh` against a fake release) and `make test-release` (the release scripts); all must pass. Clippy warnings are errors. MSRV is 1.88, edition 2021; bump `rust-version` and the CI msrv job together.
 
 **Do not run `cargo fmt`.** The tree is hand-formatted; CI doesn't gate on fmt, and a tree-wide reformat produces an unreviewable diff. Match the surrounding style.
 
@@ -61,5 +61,6 @@ Use the `rust-skills` skill when writing or reviewing Rust here. Where it confli
 
 - Conventional Commits with an optional crate/area scope: `feat(volley): ...`, `fix(config): ...`.
 - Add user-visible changes to `CHANGELOG.md` under *Unreleased*.
+- Never tag releases by hand. The version lives once, in `[workspace.package]` of the root `Cargo.toml`. A release is a `chore(release): X.Y.Z` PR made with `make release VERSION=X.Y.Z`; merging it makes `release.yml` tag `vX.Y.Z`, build every target and publish the GitHub release, with that version's CHANGELOG section as the notes.
 - Larger features get a design spec in `docs/superpowers/specs/` and an implementation plan in `docs/superpowers/plans/` (dated `YYYY-MM-DD-<topic>.md`); read the relevant ones before extending replay or the Docker/K3s deploy.
 - `codebook.toml` is the spell-checker word list; add project terms there.

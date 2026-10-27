@@ -72,13 +72,27 @@ starts with a test that reproduces the bug.
 
 ## Releasing
 
-Versions follow [SemVer](https://semver.org). To cut a release, bump the crate
-versions, move the *Unreleased* changelog section under the new version with a
-date, and tag `vX.Y.Z`. The tag triggers `.github/workflows/release.yml`,
-which builds every target, smoke-tests it, and attaches each archive with a
-`.sha256` checksum (which `scripts/install.sh` requires). A PR that touches the
-workflow, the install script or the workspace `Cargo.toml` runs the same builds
-without publishing; `make test-install` tests the script locally.
+Versions follow [SemVer](https://semver.org). Both crates share one version,
+set once under `[workspace.package]` in the root `Cargo.toml`, and redliner
+pins the engine to exactly that version. Don't tag by hand. To cut a release:
+
+1. On a branch from `main`, run `make release VERSION=X.Y.Z`. It bumps the
+   version and the engine pin, moves the changelog's *Unreleased* section
+   under `## [X.Y.Z] - <today>`, and refreshes `Cargo.lock`.
+2. Commit that as `chore(release): X.Y.Z` and open a PR. The PR builds every
+   target, and the build fails if the changelog has no notes for `X.Y.Z`.
+3. Merge it. `.github/workflows/release.yml` sees a version with no `vX.Y.Z`
+   tag, builds and smoke-tests every target (the binary must report `X.Y.Z`),
+   then publishes the GitHub release. That creates the tag, uses the
+   changelog section as the notes, and attaches each archive with the
+   `.sha256` checksum that `scripts/install.sh` requires. 0.x versions are
+   published as pre-releases.
+
+Pushes to `main` that don't change the version build nothing. A hand-pushed
+tag that doesn't match the crate version fails the workflow. A PR that touches
+the workflow, the release scripts or the workspace `Cargo.toml` runs the same
+builds without publishing. `make test-install` and `make test-release` test
+the scripts locally.
 
 Both crates go to crates.io, engine first: `cargo publish -p redliner-volley`,
 then `cargo publish -p redliner`. The engine's package name is

@@ -76,6 +76,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `--duration 0s` fall back to defaults.
 
 ### Fixed
+- `redliner --version` reports the release's version. Releases 0.1.1–0.1.5
+  were tagged without bumping the crates and all reported `0.1.0`. Releases
+  are now cut from the crate version: CI tags `v<version>` when a version bump
+  merges, refuses a tag that doesn't match it, and fails a binary that
+  reports anything else.
 - Templating no longer re-parses sampled values: a pool value containing `{{`
   (e.g. harvested or file-pool data) is inserted verbatim instead of failing
   the request as an unknown pool or bad template, and a value that references
