@@ -33,6 +33,10 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # Builds the packaged redliner against the packaged engine, as crates.io would.
+      - name: Package
+        run: cargo package --workspace --locked
+
   msrv:
     name: msrv (1.88)
     runs-on: ubuntu-latest

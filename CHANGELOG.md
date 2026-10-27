@@ -41,6 +41,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `~/.local/bin`.
 
 ### Changed
+- The engine crate is now the `redliner-volley` package (`volley` on
+  crates.io is an unrelated crate), so both crates can be published. Code
+  still imports it as `volley`; a git or path dependency on it needs
+  `volley = { package = "redliner-volley", ... }`.
 - Release builds use fat LTO, one codegen unit and stripped symbols, and the
   binary uses mimalloc. At 5000 rps against a local server the load
   generator's own CPU per request is ~28% lower, and the Linux binary shrinks

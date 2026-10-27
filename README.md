@@ -18,7 +18,7 @@ exit code. Every run leaves a timestamped report directory for audit and
 dashboards.
 
 It is a from-scratch Rust port of an internal Go/Vegeta harness, built as a
-Cargo workspace: a reusable async load engine (`volley`) and the configurable
+Cargo workspace: a reusable async load engine (`volley`, packaged as `redliner-volley`) and the configurable
 binary (`redliner`).
 
 ## Features

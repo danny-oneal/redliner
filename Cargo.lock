@@ -999,6 +999,7 @@ dependencies = [
  "percent-encoding",
  "rand 0.9.5",
  "rand_chacha",
+ "redliner-volley",
  "regex",
  "reqwest",
  "serde",
@@ -1006,7 +1007,20 @@ dependencies = [
  "serde_yaml_ng",
  "thiserror",
  "tokio",
- "volley",
+]
+
+[[package]]
+name = "redliner-volley"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "hdrhistogram",
+ "http",
+ "rand 0.9.5",
+ "rand_chacha",
+ "reqwest",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -1514,20 +1528,6 @@ name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
-
-[[package]]
-name = "volley"
-version = "0.1.0"
-dependencies = [
- "futures",
- "hdrhistogram",
- "http",
- "rand 0.9.5",
- "rand_chacha",
- "reqwest",
- "thiserror",
- "tokio",
-]
 
 [[package]]
 name = "want"
