@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
-use redliner::{run, Args, Exit};
+use redliner::{run, run_with_interrupt, Args, Exit};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -296,6 +296,7 @@ async fn e2e_writes_report_dir() {
     let manifest = std::fs::read_to_string(report.join("run_manifest.json")).unwrap();
     assert!(manifest.contains("\"passed\": true"), "manifest not finalized: {manifest}");
     assert!(manifest.contains("\"requests\":"), "manifest missing requests: {manifest}");
+    assert!(!manifest.contains("aborted"), "complete run marked aborted: {manifest}");
     // results.jsonl carries one line per recorded request.
     let raw = std::fs::read_to_string(report.join("results.jsonl")).unwrap();
     assert!(raw.lines().filter(|l| !l.is_empty()).count() > 10, "raw stream short");
@@ -527,4 +528,55 @@ async fn e2e_replay_flag_rejects_profile_config() {
     assert_eq!(mock.hits.load(Ordering::SeqCst), 0);
     // Rejected during config load, before any report dir exists.
     assert!(!dir.join("latest").exists());
+}
+
+#[tokio::test]
+async fn e2e_interrupt_writes_partial_report_and_exits_130() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("interrupt");
+    let cfg = write_cfg(&dir, &mock.url, "report:\n  junit: true\n");
+    let start = std::time::Instant::now();
+    let exit = run_with_interrupt(
+        args(&cfg, &["--out", dir.to_str().unwrap(), "--duration", "60s"]),
+        tokio::time::sleep(std::time::Duration::from_millis(500)),
+    )
+    .await;
+
+    assert_eq!(exit, Exit::Interrupted);
+    assert_eq!(exit.code(), 130);
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "ran {:?}", start.elapsed());
+    let report = newest_report(&dir);
+    for f in ["text.txt", "metrics.json", "junit.xml", "results.jsonl"] {
+        assert!(report.join(f).is_file(), "{f} missing in {report:?}");
+    }
+    let manifest = read_manifest(&dir);
+    assert_eq!(manifest["aborted"], true, "manifest: {manifest:#}");
+    assert!(manifest["finished_at"].is_string(), "manifest: {manifest:#}");
+    let n = manifest["requests"].as_u64().unwrap();
+    // ~25 hits in 500ms @ 50 rps; a full run would be 3000.
+    assert!((1..200).contains(&n), "requests {n}");
+}
+
+#[tokio::test]
+async fn e2e_interrupted_replay_is_not_a_delivery_failure() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("replay-interrupt");
+    let (cfg, _) = write_replay(&dir, &mock.url);
+    // At 0.1x the log's 600ms span stretches to 6s; stop after the first hit.
+    let exit = run_with_interrupt(
+        args(&cfg, &["--out", dir.to_str().unwrap(), "--speed", "0.1"]),
+        tokio::time::sleep(std::time::Duration::from_millis(500)),
+    )
+    .await;
+
+    assert_eq!(exit, Exit::Interrupted);
+    assert_eq!(mock.hits.load(Ordering::SeqCst), 1);
+    let manifest = read_manifest(&dir);
+    assert_eq!(manifest["aborted"], true, "manifest: {manifest:#}");
+    assert_eq!(manifest["replay"]["fired"], 1, "manifest: {manifest:#}");
+    let slos = manifest["slo_results"].as_array().cloned().unwrap_or_default();
+    assert!(
+        slos.iter().all(|r| r["name"] != "replay_delivery"),
+        "an interrupt is not a delivery failure: {manifest:#}"
+    );
 }

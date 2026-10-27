@@ -79,7 +79,13 @@ redliner --config configs/replay-example.yaml --replay prod.jsonl --speed 2
 ```
 
 **Exit codes:** `0` run passed · `1` an SLO was violated · `2` config or
-runtime error.
+runtime error · `130` interrupted.
+
+**Ctrl-C** stops a run early without losing it: no new requests are fired,
+in-flight ones finish (up to `target.timeout`), and the report directory is
+written from the partial results, with `"aborted": true` in
+`run_manifest.json`. The run exits `130`. A second Ctrl-C quits at once,
+without reports.
 
 ## How it works
 
