@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use crate::config::{Config, ConfigDuration, RequestConfig, Scenario};
 
@@ -19,8 +19,11 @@ pub enum ConfigSource {
 
 /// Redliner: SLO-driven HTTP load testing.
 #[derive(Parser, Debug, Clone)]
-#[command(name = "redliner", version)]
+#[command(name = "redliner", version, args_conflicts_with_subcommands = true)]
 pub struct Args {
+    /// Without a subcommand, redliner runs a load test.
+    #[command(subcommand)]
+    pub command: Option<Command>,
     /// Scenario config file (YAML) [default: redliner.yaml]. Without one,
     /// --url benchmarks that single endpoint.
     #[arg(long)]
@@ -85,6 +88,25 @@ pub struct Args {
     /// Fail instead of skipping log entries no scenario matches.
     #[arg(long)]
     pub strict: bool,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Compare two runs' reports; with --max-regression, exit 1 when the
+    /// candidate is slower (p50/p95/p99) or has lower throughput.
+    Compare(CompareArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct CompareArgs {
+    /// Baseline run: a report directory (e.g. reports/latest) or its metrics.json.
+    pub baseline: PathBuf,
+    /// Candidate run, in the same form.
+    pub candidate: PathBuf,
+    /// Exit 1 when a latency percentile rises, or throughput falls, by more
+    /// than this percentage of the baseline (e.g. 10%).
+    #[arg(long, value_name = "PERCENT", value_parser = crate::compare::parse_percent)]
+    pub max_regression: Option<f64>,
 }
 
 impl Args {
@@ -470,5 +492,28 @@ mod tests {
     fn header_without_a_colon_is_rejected() {
         assert!(Args::try_parse_from(["redliner", "-H", "nocolon"]).is_err());
         assert!(Args::try_parse_from(["redliner", "-H", ": v"]).is_err());
+    }
+
+    #[test]
+    fn compare_is_a_subcommand() {
+        let a = Args::parse_from(["redliner", "compare", "base", "cand", "--max-regression", "10%"]);
+        match a.command {
+            Some(Command::Compare(c)) => {
+                assert_eq!(c.baseline, PathBuf::from("base"));
+                assert_eq!(c.candidate, PathBuf::from("cand"));
+                assert_eq!(c.max_regression, Some(10.0));
+            }
+            other => panic!("expected compare, got {other:?}"),
+        }
+        let a = Args::parse_from(["redliner", "compare", "base", "cand"]);
+        assert!(matches!(a.command, Some(Command::Compare(ref c)) if c.max_regression.is_none()));
+        assert!(Args::parse_from(["redliner", "--rate", "5"]).command.is_none());
+    }
+
+    #[test]
+    fn compare_rejects_run_flags_and_bad_thresholds() {
+        assert!(Args::try_parse_from(["redliner", "--rate", "5", "compare", "a", "b"]).is_err());
+        assert!(Args::try_parse_from(["redliner", "compare", "a"]).is_err());
+        assert!(Args::try_parse_from(["redliner", "compare", "a", "b", "--max-regression", "-5%"]).is_err());
     }
 }

@@ -27,7 +27,7 @@ CI runs `make lint`, `make test`, `cargo +1.88 check` (MSRV), `cargo package --w
 Two workspace crates with a one-way dependency: `redliner` → `volley`.
 
 - **`volley`** — protocol- and config-agnostic engine. `Attacker::attack(targeter, pacer, duration, phase)` returns an mpsc receiver of `AttackResult`s; in-flight requests are capped by a semaphore at `max_workers`. The two seams are the `Pacer` trait (`pace(elapsed, hits) -> (wait, stop)`) and the `Targeter` trait (`target(seq, &mut Target)`). Never add config, CLI, or protocol knowledge here.
-- **`redliner`** — `main.rs` is a shim; everything is in the lib. `run.rs::run_inner` is the pipeline and the best entry point for understanding the flow:
+- **`redliner`** — `main.rs` is a shim; everything is in the lib. The `compare` subcommand (`compare.rs`, dispatched at the top of `run_with_interrupt`) only reads two finished report dirs; it never fires traffic. `run.rs::run_inner` is the pipeline and the best entry point for understanding the flow:
   1. `config::load_config_file_with` — decode YAML, apply CLI overrides (`cli.rs`), resolve relative file paths against the **config file's directory**, then validate. With no config file, `--url` alone builds a one-scenario REST config in memory (`Args::url_request`) and goes through the same defaults and validation (`config::load_config_with`).
   2. Replay (if `cfg.replay` is set) parses, matches, and schedules the whole log *before* anything else, so a bad log fails early.
   3. `encode::new_encoder` picks GraphQL or REST behind the `Encoder` trait; `data::build_pools` + `data::harvest::run_harvest` fill pools (harvest probes the live service first).

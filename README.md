@@ -38,6 +38,9 @@ binary (`redliner`).
   out-of-set status as a failure, so the success rate tells the truth.
 - **SLO gate:** success rate, p50/p95/p99, and throughput thresholds decide the
   process exit code.
+- **Regression gate:** `redliner compare <baseline> <candidate> --max-regression 10%`
+  shows the change between two runs and fails when the candidate is slower
+  or has lower throughput than the baseline, overall or per operation.
 - **Reports:** per-run `reports/<timestamp>/` with summaries, a latency
   histogram, `metrics.json`, per-operation / per-phase breakdowns, a JUnit file
   for CI, a raw `results.jsonl` stream, and a full run manifest.
@@ -152,7 +155,8 @@ The workspace has two crates:
 
 The config file is the source of truth; flags override only what you set.
 With no config file, `--url` (plus `--method`, `--body` and `-H`) describes the
-one request to benchmark.
+one request to benchmark. `redliner compare` compares two finished runs (see
+[Comparing runs](#comparing-runs)).
 
 | flag          | overrides      | notes                                   |
 | ------------- | -------------- | --------------------------------------- |
@@ -279,6 +283,40 @@ Each run writes `reports/<UTC timestamp>/` and refreshes a `latest` symlink:
 When a run violates an SLO, the summary also prints a redline bar so a failure
 is impossible to miss in a scrollback or CI log.
 
+### Comparing runs
+
+`redliner compare <baseline> <candidate>` reads two report directories (or
+their `metrics.json`) and prints the change in p50/p95/p99, throughput and
+success rate, overall and for each operation in both runs:
+
+```console
+$ redliner compare reports/baseline reports/latest --max-regression 10%
+                    baseline     candidate     change
+overall
+  p50                  414µs         414µs      +0.0%
+  p95                  826µs           9ms    +989.6%  REGRESSED
+  p99                1.402ms       1.402ms      +0.0%
+  throughput          51.0/s        40.8/s     -20.0%  REGRESSED
+  success           100.000%       99.000%   -1.000pp
+...
+2 regressions over 10%: overall p95, overall throughput
+```
+
+With `--max-regression`, a latency percentile that rises, or a throughput
+that falls, by more than that share of the baseline is a regression, and the
+command exits `1`. Without the flag it only reports, and exits `0`.
+
+- **Success rate** is shown in percentage points but not gated, because
+  `slos.success_rate` already sets its floor on every run.
+- **Operations** present in only one run are listed but not compared.
+- **Rates:** if the two runs fired at rates more than 5% apart, compare
+  warns, because latency and throughput then aren't like for like.
+- **Exit codes:** `2` when a report can't be read.
+
+Small latencies are noisy in relative terms: 400µs → 480µs is +20%. Pick a
+threshold to suit your service, and compare runs made with the same config
+and rate.
+
 ## CI usage
 
 ```yaml
@@ -289,6 +327,10 @@ is impossible to miss in a scrollback or CI log.
 
 # No config file: gate one endpoint straight from the command line
 - run: redliner --url https://staging.example.com/health --rate 50 --duration 1m --slo-p95 300ms
+
+# Fail when this build is >10% slower than a baseline run you keep
+# (e.g. restored from main's last run with actions/cache or download-artifact)
+- run: redliner compare baseline-report reports/latest --max-regression 10%
 ```
 
 ## Run in K3s

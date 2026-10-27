@@ -10,7 +10,8 @@ use tokio::sync::watch;
 use volley::{Attacker, AttackerConfig, ConstantPacer, Metrics, Pacer};
 
 use crate::checks::Checker;
-use crate::cli::{Args, ConfigSource, DEFAULT_CONFIG};
+use crate::cli::{Args, Command, ConfigSource, DEFAULT_CONFIG};
+use crate::compare;
 use crate::config::{load_config_file_with, load_config_with, Config, Protocol};
 use crate::data;
 use crate::encode::{new_encoder, MixTargeter};
@@ -76,6 +77,9 @@ pub async fn run_with_interrupt<F>(args: Args, interrupt: F) -> Exit
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
+    if let Some(Command::Compare(c)) = &args.command {
+        return compare::run(c);
+    }
     match run_inner(args, interrupt).await {
         Ok(e) => e,
         Err(e) => {
