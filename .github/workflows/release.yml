@@ -1,26 +1,96 @@
 name: Release
 
+# The version in Cargo.toml is the source of truth; nobody tags by hand.
+# A push to main whose version has no v<version> tag yet is a release: build
+# every target, then publish the GitHub release (which creates the tag) with
+# that version's CHANGELOG section as its notes. Bump the version with
+# scripts/release.sh in a "chore(release): X.Y.Z" PR.
 on:
   push:
+    branches: [main]
+    # Only to reject a hand-pushed tag that doesn't match the crate version.
     tags: ["v*"]
   # Build (but don't publish) when the release pipeline itself changes, so a
-  # broken target shows up in review instead of on the next tag.
+  # broken target shows up in review instead of on the next release.
   pull_request:
     paths:
       - .github/workflows/release.yml
       - scripts/install.sh
+      - scripts/release.sh
+      - scripts/changelog-section.sh
       - Cargo.toml
 
 permissions:
   contents: write
 
+# One release at a time: a second merge waits, then sees its tag exists.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      build: ${{ steps.plan.outputs.build }}
+      release: ${{ steps.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version, tag and notes
+        id: plan
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 |
+            jq -r '.packages[] | select(.name == "redliner") | .version')
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            tagged=true
+          else
+            tagged=false
+          fi
+
+          build=true
+          release=false
+          case "$GITHUB_EVENT_NAME/$GITHUB_REF_TYPE" in
+            push/tag)
+              if [ "$GITHUB_REF_NAME" != "$tag" ]; then
+                echo "::error::tag $GITHUB_REF_NAME does not match the crate version $version. Don't tag by hand: bump the version with scripts/release.sh and merge it."
+                exit 1
+              fi
+              release=true ;;
+            push/branch)
+              if [ "$tagged" = true ]; then
+                echo "$tag is already released; nothing to do."
+                build=false
+              else
+                release=true
+              fi ;;
+          esac
+
+          # An unreleased version (a release, or a release PR) needs notes.
+          if [ "$release" = true ] || [ "$tagged" = false ]; then
+            sh scripts/changelog-section.sh "$version" > /dev/null
+          fi
+
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "build=$build"
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
+          echo "version $version, tag $tag, build $build, release $release"
+
   build:
     name: ${{ matrix.target }}
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: ${{ matrix.os }}
     env:
-      # The tag on a release; on a PR, a placeholder (the ref name has a slash).
-      VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'ci' }}
+      # The tag on a release; otherwise a placeholder for the asset names.
+      VERSION: ${{ needs.plan.outputs.release == 'true' && needs.plan.outputs.tag || 'ci' }}
     strategy:
       fail-fast: false
       matrix:
@@ -64,7 +134,10 @@ jobs:
         shell: bash
         run: |
           bin="target/${{ matrix.target }}/release/redliner"
-          "$bin" --version
+          # The binary reports the version it's released as.
+          reported=$("$bin" --version)
+          echo "$reported"
+          [ "$reported" = "redliner ${{ needs.plan.outputs.version }}" ]
           if [ "${{ matrix.musl }}" = "true" ]; then
             file "$bin" | tee /dev/stderr | grep -q "statically linked\|static-pie linked"
           fi
@@ -88,10 +161,40 @@ jobs:
           "$hash  $staging.zip" | Out-File -FilePath "$staging.zip.sha256" -Encoding ascii -NoNewline
           "ASSET=$staging.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Attach to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+      - name: Upload
+        if: needs.plan.outputs.release == 'true'
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: ${{ matrix.target }}
+          path: |
             ${{ env.ASSET }}
             ${{ env.ASSET }}.sha256
+          retention-days: 1
+
+  # Only after every target built, so a release never goes out half-populated.
+  release:
+    name: publish
+    needs: [plan, build]
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release notes
+        run: sh scripts/changelog-section.sh "${{ needs.plan.outputs.version }}" > notes.md
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.plan.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ needs.plan.outputs.tag }}
+          body_path: notes.md
+          # 0.x releases stay pre-releases (scripts/install.sh includes them).
+          prerelease: ${{ startsWith(needs.plan.outputs.version, '0.') }}
+          files: dist/*
