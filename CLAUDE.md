@@ -18,7 +18,7 @@ cargo test -p redliner --lib replay::schedule     # unit tests under a module pa
 cargo test -p redliner --test e2e <name> -- --exact --nocapture
 ```
 
-CI runs exactly `make lint` and `make test`; both must pass. Clippy warnings are errors. MSRV is 1.88, edition 2021.
+CI runs `make lint`, `make test`, `cargo +1.88 check` (MSRV) and `make test-install` (shellcheck + `scripts/install.sh` against a fake release); all must pass. Clippy warnings are errors. MSRV is 1.88, edition 2021; bump `rust-version` and the CI msrv job together.
 
 **Do not run `cargo fmt`.** The tree is hand-formatted; CI doesn't gate on fmt, and a tree-wide reformat produces an unreviewable diff. Match the surrounding style.
 

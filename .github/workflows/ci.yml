@@ -32,3 +32,32 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  msrv:
+    name: msrv (1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Keep in step with `rust-version` in the crate manifests.
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      # `+1.88` beats rust-toolchain.toml, which pins `stable`.
+      - name: Check on the minimum supported Rust
+        run: cargo +1.88 check --workspace --all-targets --locked
+
+  install-script:
+    name: install script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shellcheck
+        run: shellcheck -s sh scripts/install.sh scripts/test-install.sh
+
+      - name: Install against a fake release
+        run: make test-install
