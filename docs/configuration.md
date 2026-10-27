@@ -388,6 +388,7 @@ Optional. Every run writes `report.dir/<UTC timestamp>/` and refreshes a
 | `dir`    | string | `reports` | base directory for run folders (overridable with `--out`) |
 | `junit`  | bool   | `false`   | also write `junit.xml` (SLO results as test cases) |
 | `keep_raw` | bool | `true`    | also write `results.jsonl` (one JSON record per request) |
+| `live_stats` | duration | `10s` | print a progress line on stderr this often (running total; rate, success, p95 and failures for the last window); `0s` turns it off, otherwise at least `100ms`. Warmup is not shown (overridable with `--live-stats`) |
 
 ### Accepted for compatibility (no effect)
 

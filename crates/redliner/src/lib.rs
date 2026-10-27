@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod data;
 pub mod encode;
+pub mod live;
 pub mod mix;
 pub mod phases;
 pub mod replay;

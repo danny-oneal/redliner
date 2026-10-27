@@ -53,7 +53,21 @@ fn defaults_applied() {
     assert_eq!(c.report.dir, "reports");
     assert_eq!(c.report.keep_raw, Some(true));
     assert_eq!(c.report.per_operation, Some(true));
+    assert_eq!(c.report.live_stats, Some(ConfigDuration(Duration::from_secs(10))));
     assert_eq!(c.scenarios[0].request.method, "GET");
+}
+
+#[test]
+fn live_stats_zero_turns_it_off() {
+    let c = load_str(&format!("{GQL_HEAD}report:\n  live_stats: 0s\n{ONE_GQL}")).unwrap();
+    assert_eq!(c.report.live_stats, Some(ConfigDuration(Duration::ZERO)));
+}
+
+#[test]
+fn live_stats_below_100ms_rejected() {
+    let y = format!("{GQL_HEAD}report:\n  live_stats: 50ms\n{ONE_GQL}");
+    assert!(err_text(load_str(&y))
+        .contains("report.live_stats must be 0s (off) or at least 100ms, got 50ms"));
 }
 
 #[test]

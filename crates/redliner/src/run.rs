@@ -14,6 +14,7 @@ use crate::cli::Args;
 use crate::config::{load_config_file_with, Config};
 use crate::data;
 use crate::encode::{new_encoder, MixTargeter};
+use crate::live::Live;
 use crate::mix::WeightedMix;
 use crate::phases::{build_phases, Phase};
 use crate::replay::schedule::Schedule;
@@ -204,14 +205,15 @@ where
         .then(|| report_dir.join("results.jsonl"));
     let mut collector =
         Collector::new(raw.as_deref()).map_err(|e| anyhow::anyhow!("open results.jsonl: {e}"))?;
+    let mut live = Live::new(cfg.report.live_stats.unwrap_or_default().as_std());
     let fired = match plan {
         Plan::Profile(t, phases) => {
-            attack_profile(&cfg, t, &phases, &checker, &mut collector, &stop).await?;
+            attack_profile(&cfg, t, &phases, &checker, &mut collector, &stop, &mut live).await?;
             None
         }
-        Plan::Replay(t, schedule) => {
-            Some(attack_replay(&cfg, t, schedule, &checker, &mut collector, &stop).await?)
-        }
+        Plan::Replay(t, schedule) => Some(
+            attack_replay(&cfg, t, schedule, &checker, &mut collector, &stop, &mut live).await?,
+        ),
     };
     collector.close();
     let elapsed = start.elapsed();
@@ -296,6 +298,7 @@ async fn attack_profile(
     checker: &Checker,
     collector: &mut Collector,
     stop: &watch::Receiver<bool>,
+    live: &mut Live,
 ) -> anyhow::Result<()> {
     // Warmup: uniform, unmeasured, 10% of the first phase's rate.
     let warmup = cfg.load.warmup.as_std();
@@ -309,6 +312,7 @@ async fn attack_profile(
         while rx.recv().await.is_some() {}
     }
 
+    live.begin();
     for ph in phases {
         if *stop.borrow() {
             break;
@@ -322,8 +326,9 @@ async fn attack_profile(
             ph.name.clone(),
             stop.clone(),
         );
-        while let Some(mut r) = rx.recv().await {
+        while let Some(mut r) = live.recv(&mut rx, &ph.name).await {
             checker.apply(&mut r);
+            live.add(&r);
             let op = targeter.operation(&r.method, &r.url);
             collector.add(&r, &ph.name, op.as_deref());
         }
@@ -341,6 +346,7 @@ async fn attack_replay(
     checker: &Checker,
     collector: &mut Collector,
     stop: &watch::Receiver<bool>,
+    live: &mut Live,
 ) -> anyhow::Result<u64> {
     let attacker = new_attacker(cfg)?;
     // Give a slow-but-responding target room to answer the last hits: one
@@ -350,8 +356,10 @@ async fn attack_replay(
     let mut rx =
         attacker.attack_until(targeter.clone(), pacer, duration, "replay".into(), stop.clone());
     let mut fired = 0u64;
-    while let Some(mut r) = rx.recv().await {
+    live.begin();
+    while let Some(mut r) = live.recv(&mut rx, "replay").await {
         checker.apply(&mut r);
+        live.add(&r);
         collector.add(&r, "replay", targeter.operation(r.seq));
         fired += 1;
     }
