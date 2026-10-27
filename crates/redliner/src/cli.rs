@@ -31,6 +31,9 @@ pub struct Args {
     /// Override report.dir.
     #[arg(long)]
     pub out: Option<String>,
+    /// Override report.live_stats: progress line interval (e.g. 5s; 0s = off).
+    #[arg(long)]
+    pub live_stats: Option<ConfigDuration>,
     /// Validate config and exit.
     #[arg(long)]
     pub validate: bool,
@@ -68,6 +71,9 @@ impl Args {
         }
         if let Some(o) = &self.out {
             cfg.report.dir = o.clone();
+        }
+        if let Some(l) = self.live_stats {
+            cfg.report.live_stats = Some(l);
         }
         if let Some(p) = &self.replay {
             // Absolute against the caller's cwd: the config-dir join in
@@ -123,6 +129,13 @@ mod tests {
         assert_eq!(cfg.load.rate, 9.0);
         assert_eq!(cfg.load.duration.as_std().as_secs(), 2);
         assert_eq!(cfg.target.url, "http://a");
+    }
+
+    #[test]
+    fn live_stats_flag_overrides() {
+        let mut cfg = Config::default();
+        Args::parse_from(["redliner", "--live-stats", "0s"]).apply_overrides(&mut cfg);
+        assert_eq!(cfg.report.live_stats, Some(ConfigDuration(std::time::Duration::ZERO)));
     }
 
     #[test]

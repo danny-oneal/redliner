@@ -244,6 +244,9 @@ pub struct ReportConfig {
     pub keep_raw: Option<bool>,
     /// Tri-state; default true.
     pub per_operation: Option<bool>,
+    /// How often to print a progress line on stderr; `0s` turns it off.
+    /// Tri-state; default 10s.
+    pub live_stats: Option<ConfigDuration>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -419,6 +422,8 @@ impl Config {
         }
         r.keep_raw.get_or_insert(true);
         r.per_operation.get_or_insert(true);
+        r.live_stats
+            .get_or_insert(ConfigDuration(Duration::from_secs(10)));
 
         for s in &mut self.scenarios {
             if s.request.method.is_empty() {
@@ -585,6 +590,13 @@ impl Config {
             if t.protocol == Protocol::Rest && h.request.path.is_empty() {
                 errs.push(format!(
                     "data.harvest[{i}]: request.path is required for rest"
+                ));
+            }
+        }
+        if let Some(every) = self.report.live_stats.map(|d| d.as_std()) {
+            if !every.is_zero() && every < Duration::from_millis(100) {
+                errs.push(format!(
+                    "report.live_stats must be 0s (off) or at least 100ms, got {every:?}"
                 ));
             }
         }

@@ -87,6 +87,15 @@ written from the partial results, with `"aborted": true` in
 `run_manifest.json`. The run exits `130`. A second Ctrl-C quits at once,
 without reports.
 
+**Live stats.** While a run is going, a progress line goes to stderr every 10s
+(`report.live_stats` / `--live-stats`; `0s` turns it off). It shows the running
+request total, plus the rate, success, p95 and failure count of the last
+window, so a run that is going bad is visible before the summary:
+
+```
+[live 20.0s] step-2(200 rps) · 3012 requests · last 10.0s: 199.8 rps, 99.95% ok, p95 12.4ms, 1 failed
+```
+
 ## How it works
 
 ```
@@ -119,6 +128,7 @@ The config file is the source of truth; flags override only what you set.
 | `--warmup`    | `load.warmup`  | Go-style duration                       |
 | `--seed`      | `load.seed`    | fix for a reproducible run              |
 | `--out`       | `report.dir`   |                                         |
+| `--live-stats`| `report.live_stats` | progress line interval, e.g. `5s`; `0s` turns it off |
 | `--validate`  | —              | validate the config and exit `0`        |
 | `--replay`    | `replay.source`| replay a JSONL/HAR log instead of a load profile |
 | `--speed`     | `replay.speed` | replay time compression (needs replay)  |

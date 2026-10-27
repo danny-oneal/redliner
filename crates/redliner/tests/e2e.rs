@@ -580,3 +580,40 @@ async fn e2e_interrupted_replay_is_not_a_delivery_failure() {
         "an interrupt is not a delivery failure: {manifest:#}"
     );
 }
+
+/// Runs the real binary (so stderr can be read) against a mock, returning
+/// the exit code and stderr.
+async fn run_binary(cfg: &std::path::Path, extra: &[&str]) -> (Option<i32>, String) {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_redliner"));
+    cmd.arg("--config").arg(cfg).args(extra);
+    let out = tokio::task::spawn_blocking(move || cmd.output().unwrap()).await.unwrap();
+    (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_live_stats_print_progress_lines() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("live");
+    let cfg = write_cfg(&dir, &mock.url, "");
+    let (code, stderr) =
+        run_binary(&cfg, &["--out", dir.to_str().unwrap(), "--live-stats", "200ms"]).await;
+
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    let lines: Vec<&str> = stderr.lines().filter(|l| l.starts_with("[live ")).collect();
+    // A 1s run at 200ms ticks: ~4 lines.
+    assert!((3..=6).contains(&lines.len()), "lines: {lines:?}");
+    assert!(lines.iter().all(|l| l.contains(" constant · ")), "lines: {lines:?}");
+    assert!(lines.last().unwrap().contains(" ok, p95 "), "lines: {lines:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_live_stats_off() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("live-off");
+    let cfg = write_cfg(&dir, &mock.url, "");
+    let (code, stderr) =
+        run_binary(&cfg, &["--out", dir.to_str().unwrap(), "--live-stats", "0s"]).await;
+
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert!(!stderr.contains("[live "), "stderr: {stderr}");
+}

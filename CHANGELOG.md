@@ -23,6 +23,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   10,000,000 hits (both exit `2`); and a replay that falls behind records
   `fired`/`dropped`, fails a `replay_delivery` check (also in `junit.xml`),
   warns, and exits `1`. See `configs/replay-example.yaml`.
+- **Live stats** — a progress line on stderr every 10s during the attack: the
+  running request total plus the rate, success, p95 and failures of the last
+  window. Set the interval with `report.live_stats` or `--live-stats` (`0s`
+  turns it off; anything else must be at least `100ms`).
 - **Graceful Ctrl-C** — the first Ctrl-C stops firing, lets in-flight requests
   finish, and writes the full report directory from the partial results
   (`"aborted": true` in `run_manifest.json`, an `INTERRUPTED` line in the
