@@ -58,6 +58,24 @@ fn defaults_applied() {
 }
 
 #[test]
+fn slos_reject_out_of_range_thresholds() {
+    // A percentage where a fraction belongs would fail every run.
+    let y = format!("{GQL_HEAD}slos:\n  success_rate: 99.5\n  throughput_min: -1\n{ONE_GQL}");
+    let e = err_text(load_str(&y));
+    assert!(
+        e.contains("slos.success_rate must be a fraction from 0 to 1 (e.g. 0.995), got 99.5"),
+        "{e}"
+    );
+    assert!(e.contains("slos.throughput_min must be >= 0, got -1"), "{e}");
+}
+
+#[test]
+fn slos_accept_the_edges() {
+    let y = format!("{GQL_HEAD}slos:\n  success_rate: 1\n  throughput_min: 0\n{ONE_GQL}");
+    assert!(load_str(&y).is_ok());
+}
+
+#[test]
 fn live_stats_zero_turns_it_off() {
     let c = load_str(&format!("{GQL_HEAD}report:\n  live_stats: 0s\n{ONE_GQL}")).unwrap();
     assert_eq!(c.report.live_stats, Some(ConfigDuration(Duration::ZERO)));

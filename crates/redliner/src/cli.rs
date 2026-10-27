@@ -55,6 +55,21 @@ pub struct Args {
     /// Override report.live_stats: progress line interval (e.g. 5s; 0s = off).
     #[arg(long)]
     pub live_stats: Option<ConfigDuration>,
+    /// Override slos.success_rate: minimum fraction of successful requests (e.g. 0.995).
+    #[arg(long, value_name = "FRACTION")]
+    pub slo_success_rate: Option<f64>,
+    /// Override slos.p50: maximum p50 latency (e.g. 50ms; 0s = not enforced).
+    #[arg(long, value_name = "DURATION")]
+    pub slo_p50: Option<ConfigDuration>,
+    /// Override slos.p95: maximum p95 latency (e.g. 200ms; 0s = not enforced).
+    #[arg(long, value_name = "DURATION")]
+    pub slo_p95: Option<ConfigDuration>,
+    /// Override slos.p99: maximum p99 latency (e.g. 1s; 0s = not enforced).
+    #[arg(long, value_name = "DURATION")]
+    pub slo_p99: Option<ConfigDuration>,
+    /// Override slos.throughput_min: minimum successful requests per second.
+    #[arg(long, value_name = "RPS")]
+    pub slo_throughput_min: Option<f64>,
     /// Validate config and exit.
     #[arg(long)]
     pub validate: bool,
@@ -98,6 +113,22 @@ impl Args {
         }
         if let Some(l) = self.live_stats {
             cfg.report.live_stats = Some(l);
+        }
+        let s = &mut cfg.slos;
+        if let Some(r) = self.slo_success_rate {
+            s.success_rate = r;
+        }
+        for (flag, slo) in [
+            (self.slo_p50, &mut s.p50),
+            (self.slo_p95, &mut s.p95),
+            (self.slo_p99, &mut s.p99),
+        ] {
+            if let Some(d) = flag {
+                *slo = d;
+            }
+        }
+        if let Some(t) = self.slo_throughput_min {
+            s.throughput_min = t;
         }
         if let Some(p) = &self.replay {
             // Absolute against the caller's cwd: the config-dir join in
@@ -398,6 +429,41 @@ mod tests {
         assert_eq!(cfg.target.headers["X-Keep"], "k");
         assert_eq!(cfg.target.headers["X-A"], "1");
         assert_eq!(cfg.target.headers["X-B"], "two words");
+    }
+
+    #[test]
+    fn slo_flags_override() {
+        let mut cfg = Config::default();
+        Args::parse_from([
+            "redliner",
+            "--slo-success-rate",
+            "0.995",
+            "--slo-p50",
+            "50ms",
+            "--slo-p95",
+            "200ms",
+            "--slo-p99",
+            "1s",
+            "--slo-throughput-min",
+            "100",
+        ])
+        .apply_overrides(&mut cfg);
+        let s = &cfg.slos;
+        assert_eq!(s.success_rate, 0.995);
+        assert_eq!(s.p50.as_std(), std::time::Duration::from_millis(50));
+        assert_eq!(s.p95.as_std(), std::time::Duration::from_millis(200));
+        assert_eq!(s.p99.as_std(), std::time::Duration::from_secs(1));
+        assert_eq!(s.throughput_min, 100.0);
+    }
+
+    #[test]
+    fn slo_flag_zero_turns_off_a_file_slo() {
+        let mut cfg = Config::default();
+        cfg.slos.p99 = ConfigDuration(std::time::Duration::from_millis(5));
+        cfg.slos.success_rate = 0.99;
+        Args::parse_from(["redliner", "--slo-p99", "0s"]).apply_overrides(&mut cfg);
+        assert!(cfg.slos.p99.as_std().is_zero());
+        assert_eq!(cfg.slos.success_rate, 0.99, "unset flags leave the file alone");
     }
 
     #[test]

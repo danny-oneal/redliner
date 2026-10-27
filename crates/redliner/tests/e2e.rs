@@ -716,3 +716,35 @@ async fn e2e_redliner_yaml_in_cwd_beats_zero_config() {
     assert!(!lines.is_empty());
     assert!(lines.iter().all(|l| l.starts_with("POST /graphql")), "{lines:?}");
 }
+
+#[tokio::test]
+async fn e2e_slo_flags_gate_a_zero_config_run() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("zero-slo-fail");
+    let url = format!("{}/items", origin(&mock));
+    let out = dir.to_str().unwrap();
+    let args = Args::parse_from([
+        "redliner", "--url", &url, "--rate", "50", "--duration", "1s", "--live-stats", "0s",
+        "--slo-p99", "1us", "--out", out,
+    ]);
+    assert_eq!(run(args).await, Exit::SloFailed);
+    let manifest = read_manifest(&dir);
+    assert_eq!(manifest["passed"], false);
+    assert_eq!(manifest["slo_results"][0]["name"], "latency_p99");
+}
+
+#[tokio::test]
+async fn e2e_slo_flags_pass_when_met() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("zero-slo-pass");
+    let url = format!("{}/items", origin(&mock));
+    let out = dir.to_str().unwrap();
+    let args = Args::parse_from([
+        "redliner", "--url", &url, "--rate", "50", "--duration", "1s", "--live-stats", "0s",
+        "--slo-success-rate", "0.99", "--slo-p99", "10s", "--out", out,
+    ]);
+    assert_eq!(run(args).await, Exit::Ok);
+    let manifest = read_manifest(&dir);
+    assert_eq!(manifest["passed"], true);
+    assert_eq!(manifest["slo_results"].as_array().map(Vec::len), Some(2));
+}
