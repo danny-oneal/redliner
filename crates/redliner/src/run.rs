@@ -5,6 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use tokio::sync::watch;
+
 use volley::{Attacker, AttackerConfig, ConstantPacer, Metrics, Pacer};
 
 use crate::checks::Checker;
@@ -26,6 +28,8 @@ pub enum Exit {
     Ok = 0,
     SloFailed = 1,
     Error = 2,
+    /// Stopped by Ctrl-C; reports hold partial results (128 + SIGINT).
+    Interrupted = 130,
 }
 
 impl Exit {
@@ -58,7 +62,17 @@ fn new_attacker(cfg: &Config) -> Result<Attacker, volley::Error> {
 }
 
 pub async fn run(args: Args) -> Exit {
-    match run_inner(args).await {
+    run_with_interrupt(args, ctrl_c()).await
+}
+
+/// Like [`run`], but stops the attack when `interrupt` resolves: no new hits
+/// are fired, in-flight ones finish, and the partial results are reported
+/// with exit [`Exit::Interrupted`].
+pub async fn run_with_interrupt<F>(args: Args, interrupt: F) -> Exit
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    match run_inner(args, interrupt).await {
         Ok(e) => e,
         Err(e) => {
             eprintln!("redliner: {e:#}");
@@ -67,7 +81,27 @@ pub async fn run(args: Args) -> Exit {
     }
 }
 
-async fn run_inner(args: Args) -> anyhow::Result<Exit> {
+/// Resolves on the first Ctrl-C; a second one exits at once, without reports.
+async fn ctrl_c() {
+    if tokio::signal::ctrl_c().await.is_err() {
+        // No handler could be installed, so there is nothing to wait for.
+        std::future::pending::<()>().await;
+    }
+    eprintln!(
+        "\ninterrupted: no new requests; waiting for in-flight ones (Ctrl-C again to quit now)"
+    );
+    tokio::spawn(async {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            eprintln!("interrupted again: exiting without reports");
+            std::process::exit(Exit::Interrupted.code());
+        }
+    });
+}
+
+async fn run_inner<F>(args: Args, interrupt: F) -> anyhow::Result<Exit>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
     let cfg = load_config_file_with(&args.config, |c| args.apply_overrides(c))?;
     // Replay knobs without a replay target are one clear error, not a cascade.
     args.check_replay_knobs(cfg.replay.is_some())
@@ -145,9 +179,18 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
         slo_results: Vec::new(),
         passed: None,
         replay: replay.as_ref().map(|r| r.summary.clone()),
+        aborted: false,
     };
     report::write_manifest(&report_dir, &manifest)
         .map_err(|e| anyhow::anyhow!("write manifest: {e}"))?;
+
+    // Armed only now: an interrupt before this point has no trail to finish,
+    // so the default (kill the process) is right.
+    let (stop_tx, stop) = watch::channel(false);
+    tokio::spawn(async move {
+        interrupt.await;
+        let _ = stop_tx.send(true);
+    });
 
     let start = Instant::now();
 
@@ -163,15 +206,16 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
         Collector::new(raw.as_deref()).map_err(|e| anyhow::anyhow!("open results.jsonl: {e}"))?;
     let fired = match plan {
         Plan::Profile(t, phases) => {
-            attack_profile(&cfg, t, &phases, &checker, &mut collector).await?;
+            attack_profile(&cfg, t, &phases, &checker, &mut collector, &stop).await?;
             None
         }
         Plan::Replay(t, schedule) => {
-            Some(attack_replay(&cfg, t, schedule, &checker, &mut collector).await?)
+            Some(attack_replay(&cfg, t, schedule, &checker, &mut collector, &stop).await?)
         }
     };
     collector.close();
     let elapsed = start.elapsed();
+    let interrupted = *stop.borrow();
 
     let mut results = slo::evaluate(&cfg.slos, collector.overall());
     let mut passed = slo::passed(&results);
@@ -186,20 +230,23 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
         let dropped = hits.saturating_sub(fired);
         r.summary.fired = Some(fired);
         r.summary.dropped = Some(dropped);
-        results.push(SloResult {
-            name: "replay_delivery".into(),
-            target: format!("{hits} hits"),
-            observed: format!("{fired} fired"),
-            passed: dropped == 0,
-        });
-        if dropped > 0 {
-            eprintln!(
-                "warning: replay fell behind: fired {fired} of {hits} scheduled hits \
-                 ({dropped} dropped); raise load.max_workers if the load generator, \
-                 not the target, is the bottleneck"
-            );
-            fell_behind = true;
-            passed = false;
+        // An interrupt cuts the schedule short on purpose; that is not falling behind.
+        if !interrupted {
+            results.push(SloResult {
+                name: "replay_delivery".into(),
+                target: format!("{hits} hits"),
+                observed: format!("{fired} fired"),
+                passed: dropped == 0,
+            });
+            if dropped > 0 {
+                eprintln!(
+                    "warning: replay fell behind: fired {fired} of {hits} scheduled hits \
+                     ({dropped} dropped); raise load.max_workers if the load generator, \
+                     not the target, is the bottleneck"
+                );
+                fell_behind = true;
+                passed = false;
+            }
         }
     }
 
@@ -208,6 +255,7 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
     manifest.slo_results = results.clone();
     manifest.passed = Some(passed);
     manifest.replay = replay.as_ref().map(|r| r.summary.clone());
+    manifest.aborted = interrupted;
     report::write_reports(&report_dir, &collector, &manifest)
         .map_err(|e| anyhow::anyhow!("write reports: {e}"))?;
     if cfg.report.junit {
@@ -216,6 +264,7 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
     }
 
     print_summary(
+        interrupted,
         collector.overall(),
         collector.per_op(),
         replay.as_ref().map(|r| &r.summary),
@@ -224,6 +273,9 @@ async fn run_inner(args: Args) -> anyhow::Result<Exit> {
         &report_dir,
     );
 
+    if interrupted {
+        return Ok(Exit::Interrupted);
+    }
     if fell_behind || (cfg.slos.enforced() && !passed) {
         return Ok(Exit::SloFailed);
     }
@@ -243,6 +295,7 @@ async fn attack_profile(
     phases: &[Phase],
     checker: &Checker,
     collector: &mut Collector,
+    stop: &watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     // Warmup: uniform, unmeasured, 10% of the first phase's rate.
     let warmup = cfg.load.warmup.as_std();
@@ -251,18 +304,23 @@ async fn attack_profile(
         let freq = ((first_rate / 10.0) as u64).max(1);
         let pacer = Arc::new(ConstantPacer { freq, per: Duration::from_secs(1) });
         let attacker = new_attacker(cfg)?;
-        let mut rx = attacker.attack(targeter.clone(), pacer, warmup, "warmup".into());
+        let mut rx =
+            attacker.attack_until(targeter.clone(), pacer, warmup, "warmup".into(), stop.clone());
         while rx.recv().await.is_some() {}
     }
 
     for ph in phases {
+        if *stop.borrow() {
+            break;
+        }
         eprintln!("attack: {} for {:?} (nominal {} rps)", ph.name, ph.duration, ph.rate);
         let attacker = new_attacker(cfg)?;
-        let mut rx = attacker.attack(
+        let mut rx = attacker.attack_until(
             targeter.clone(),
             Arc::new(DynPacer(ph.pacer.clone())),
             ph.duration,
             ph.name.clone(),
+            stop.clone(),
         );
         while let Some(mut r) = rx.recv().await {
             checker.apply(&mut r);
@@ -282,13 +340,15 @@ async fn attack_replay(
     schedule: Arc<Schedule>,
     checker: &Checker,
     collector: &mut Collector,
+    stop: &watch::Receiver<bool>,
 ) -> anyhow::Result<u64> {
     let attacker = new_attacker(cfg)?;
     // Give a slow-but-responding target room to answer the last hits: one
     // request timeout past the last offset, plus a drain second.
     let duration = schedule.span() + cfg.target.timeout.as_std() + Duration::from_secs(1);
     let pacer = Arc::new(SchedulePacer::new(schedule));
-    let mut rx = attacker.attack(targeter.clone(), pacer, duration, "replay".into());
+    let mut rx =
+        attacker.attack_until(targeter.clone(), pacer, duration, "replay".into(), stop.clone());
     let mut fired = 0u64;
     while let Some(mut r) = rx.recv().await {
         checker.apply(&mut r);
@@ -299,6 +359,7 @@ async fn attack_replay(
 }
 
 fn print_summary(
+    interrupted: bool,
     m: &Metrics,
     per_op: &BTreeMap<String, Metrics>,
     replay: Option<&ReplaySummary>,
@@ -308,6 +369,9 @@ fn print_summary(
 ) {
     println!();
     println!("==== redliner summary ====");
+    if interrupted {
+        println!("status        : INTERRUPTED (partial results)");
+    }
     println!("elapsed       : {}", fmt_dur(elapsed));
     println!("requests      : {}", m.requests);
     println!("rate (actual) : {:.1} rps", m.rate);

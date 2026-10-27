@@ -23,6 +23,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   10,000,000 hits (both exit `2`); and a replay that falls behind records
   `fired`/`dropped`, fails a `replay_delivery` check (also in `junit.xml`),
   warns, and exits `1`. See `configs/replay-example.yaml`.
+- **Graceful Ctrl-C** — the first Ctrl-C stops firing, lets in-flight requests
+  finish, and writes the full report directory from the partial results
+  (`"aborted": true` in `run_manifest.json`, an `INTERRUPTED` line in the
+  summary), then exits `130`. A second Ctrl-C quits immediately without
+  reports. Library users get `redliner::run_with_interrupt` and
+  `volley::Attacker::attack_until`, which stops on a `watch` flag even mid-wait.
 
 ### Changed
 - `volley::Targeter::target` now takes the hit index `seq: u64` (breaking for

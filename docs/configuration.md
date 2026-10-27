@@ -201,6 +201,8 @@ are not silently ignored: the run prints a warning, records `fired`/`dropped` in
 the replay summary and `run_manifest.json`, fails the `replay_delivery` check
 (listed with the SLOs and in `junit.xml`), and **exits `1`** (even with no SLOs
 enforced). Raise `load.max_workers` if the load generator is the bottleneck.
+A run stopped with Ctrl-C still records `fired`/`dropped`, but skips the
+`replay_delivery` check and exits `130` instead.
 
 ### Summary
 

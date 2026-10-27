@@ -13,4 +13,4 @@ pub mod run;
 pub mod slo;
 
 pub use cli::Args;
-pub use run::{run, Exit};
+pub use run::{run, run_with_interrupt, Exit};

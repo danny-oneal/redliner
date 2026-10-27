@@ -34,7 +34,7 @@ Two workspace crates with a one-way dependency: `redliner` → `volley`.
   4. Plan is either `Profile` (`MixTargeter` + weighted `mix.rs` + `phases.rs` pacers, with an unmeasured warmup at 10% rate) or `Replay` (`ScheduleTargeter` + `SchedulePacer` from `replay/`).
   5. A report dir and initial `run_manifest.json` are written **before traffic**, so aborted runs leave a trail.
   6. Each result goes through `checks::Checker` (reclassifies app-layer failures, e.g. a 200 with GraphQL `errors`) into `report::Collector`.
-  7. `slo::evaluate` → reports/JUnit → `Exit` code: `0` ok, `1` SLO failed (or replay dropped hits — the synthetic `replay_delivery` SLO), `2` config/runtime error.
+  7. `slo::evaluate` → reports/JUnit → `Exit` code: `0` ok, `1` SLO failed (or replay dropped hits — the synthetic `replay_delivery` SLO), `2` config/runtime error, `130` interrupted by Ctrl-C (`run_with_interrupt` stops firing, drains in-flight hits, and reports the partial run with `aborted: true`).
 
 Invariants worth knowing before you change things:
 

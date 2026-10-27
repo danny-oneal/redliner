@@ -271,6 +271,9 @@ pub struct RunManifest {
     /// What a replay run fired; absent in profile mode.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replay: Option<ReplaySummary>,
+    /// The run was interrupted (Ctrl-C) and its results are partial.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub aborted: bool,
 }
 
 /// An RFC3339-ish UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`) for manifests.
@@ -483,6 +486,7 @@ mod tests {
             slo_results: vec![],
             passed: None,
             replay: None,
+            aborted: false,
         };
         write_reports(&dir, &c, &manifest).unwrap();
 
@@ -510,6 +514,7 @@ mod tests {
             slo_results: vec![],
             passed: None,
             replay: None,
+            aborted: false,
         };
         write_reports(&one_dir, &one, &mf).unwrap();
         assert!(!one_dir.join("per_phase.json").exists());

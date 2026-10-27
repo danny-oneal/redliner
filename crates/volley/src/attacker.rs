@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
@@ -80,6 +80,26 @@ impl Attacker {
         P: Pacer + 'static,
         T: Targeter + 'static,
     {
+        // A dropped sender never flips the flag, so this never stops early.
+        let (_, never) = watch::channel(false);
+        self.attack_until(targeter, pacer, duration, name, never)
+    }
+
+    /// Like [`attack`](Self::attack), but also stops firing as soon as `stop`
+    /// turns `true` — even mid-wait. Hits already in flight still complete and
+    /// are delivered before the receiver closes.
+    pub fn attack_until<P, T>(
+        &self,
+        targeter: Arc<T>,
+        pacer: Arc<P>,
+        duration: Duration,
+        name: String,
+        mut stop: watch::Receiver<bool>,
+    ) -> mpsc::Receiver<AttackResult>
+    where
+        P: Pacer + 'static,
+        T: Targeter + 'static,
+    {
         let max_workers = self.cfg.max_workers.max(1);
         // At most `max_workers` results can be unsent at once (one per live
         // worker); a buffer >= that keeps sends from blocking under a draining
@@ -96,9 +116,12 @@ impl Attacker {
             let mut workers: JoinSet<()> = JoinSet::new();
 
             loop {
+                if *stop.borrow() {
+                    break;
+                }
                 let elapsed = start.elapsed();
-                let (wait, stop) = pacer.pace(elapsed, hits);
-                if stop || elapsed >= duration {
+                let (wait, done) = pacer.pace(elapsed, hits);
+                if done || elapsed >= duration {
                     break;
                 }
                 if !wait.is_zero() {
@@ -107,15 +130,20 @@ impl Attacker {
                     if wait >= remaining {
                         break;
                     }
-                    tokio::time::sleep(wait).await;
-                    continue;
+                    tokio::select! {
+                        _ = tokio::time::sleep(wait) => continue,
+                        _ = stopped(&mut stop) => break,
+                    }
                 }
 
                 // Bound in-flight requests. `acquire_owned` only errors on a
                 // closed semaphore, which never happens here.
-                let permit = match sem.clone().acquire_owned().await {
-                    Ok(p) => p,
-                    Err(_) => break,
+                let permit = tokio::select! {
+                    p = sem.clone().acquire_owned() => match p {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    },
+                    _ = stopped(&mut stop) => break,
                 };
 
                 let seq = hits;
@@ -140,6 +168,13 @@ impl Attacker {
         });
 
         rx
+    }
+}
+
+/// Resolves once `stop` turns `true`; never, if its sender is dropped first.
+async fn stopped(stop: &mut watch::Receiver<bool>) {
+    if stop.wait_for(|s| *s).await.is_err() {
+        std::future::pending::<()>().await;
     }
 }
 
@@ -235,6 +270,7 @@ mod tests {
     use crate::pacer::ConstantPacer;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::sync::watch;
 
     /// A targeter that points every hit at a fixed URL with a GET.
     struct UrlTargeter {
@@ -411,6 +447,91 @@ mod tests {
             "fired too many ({}) — did not stop at the deadline",
             results.len()
         );
+    }
+
+    /// Flips `stop` to true after `after`, returning the receiver half.
+    fn stop_after(after: Duration) -> watch::Receiver<bool> {
+        let (tx, rx) = watch::channel(false);
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            let _ = tx.send(true);
+        });
+        rx
+    }
+
+    #[tokio::test]
+    async fn attack_until_stops_when_signalled() {
+        let url = spawn_ok_server().await;
+        let attacker = Attacker::new(cfg(Duration::from_secs(5))).unwrap();
+        let pacer = Arc::new(ConstantPacer { freq: 50, per: Duration::from_secs(1) });
+        let targeter = Arc::new(UrlTargeter { url });
+
+        let start = Instant::now();
+        let mut rx = attacker.attack_until(
+            targeter,
+            pacer,
+            Duration::from_secs(30),
+            "stop".to_string(),
+            stop_after(Duration::from_millis(300)),
+        );
+        let mut results = Vec::new();
+        while let Some(r) = rx.recv().await {
+            results.push(r);
+        }
+
+        assert!(start.elapsed() < Duration::from_secs(3), "ran {:?}", start.elapsed());
+        assert!(!results.is_empty(), "expected hits before the stop");
+        // ~15 hits for 300ms @ 50rps; far below the 1500 a full run fires.
+        assert!(results.len() <= 40, "fired {} — did not stop", results.len());
+    }
+
+    #[tokio::test]
+    async fn attack_until_stop_cuts_a_long_pacer_wait() {
+        let url = spawn_ok_server().await;
+        let attacker = Attacker::new(cfg(Duration::from_secs(5))).unwrap();
+        // The first hit is scheduled an hour in.
+        let pacer = Arc::new(ConstantPacer { freq: 1, per: Duration::from_secs(3600) });
+        let targeter = Arc::new(UrlTargeter { url });
+
+        let start = Instant::now();
+        let mut rx = attacker.attack_until(
+            targeter,
+            pacer,
+            Duration::from_secs(7200),
+            "wait".to_string(),
+            stop_after(Duration::from_millis(200)),
+        );
+        let mut n = 0;
+        while rx.recv().await.is_some() {
+            n += 1;
+        }
+
+        assert_eq!(n, 0);
+        assert!(start.elapsed() < Duration::from_secs(3), "ran {:?}", start.elapsed());
+    }
+
+    #[tokio::test]
+    async fn attack_until_dropped_sender_never_stops() {
+        let url = spawn_ok_server().await;
+        let attacker = Attacker::new(cfg(Duration::from_secs(5))).unwrap();
+        let pacer = Arc::new(ConstantPacer { freq: 50, per: Duration::from_secs(1) });
+        let targeter = Arc::new(UrlTargeter { url });
+        let (_, stop) = watch::channel(false);
+
+        let mut rx = attacker.attack_until(
+            targeter,
+            pacer,
+            Duration::from_millis(500),
+            "nostop".to_string(),
+            stop,
+        );
+        let mut n = 0;
+        while rx.recv().await.is_some() {
+            n += 1;
+        }
+
+        // Runs to its deadline (~25 hits), not cut short at the first hit.
+        assert!(n >= 15, "fired only {n}");
     }
 
     /// A targeter that records the hit index it was called with.
