@@ -2,7 +2,7 @@
 # CONFIG overrides the scenario file used by `run` / `validate`.
 CONFIG ?= configs/graphql-catalog.yaml
 
-.PHONY: build test lint install run validate clean \
+.PHONY: build test lint install test-install run validate clean \
         docker-build image-save k3s-import k3s-deploy k3s-logs
 
 ## build the release binary
@@ -20,6 +20,10 @@ lint:
 ## install the `redliner` binary into ~/.cargo/bin
 install:
 	cargo install --path crates/redliner --locked
+
+## test scripts/install.sh against a fake local release
+test-install:
+	sh scripts/test-install.sh
 
 ## run a scenario (make run CONFIG=configs/rest-example.yaml)
 run:

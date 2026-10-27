@@ -15,7 +15,7 @@ the conventions the codebase already follows.
 ```
 Cargo.toml              workspace manifest
 crates/
-  volley/               async load engine (no dependency on redliner)
+  volley/               async load engine, package redliner-volley (no dependency on redliner)
   redliner/            the binary: config, encoders, pools, checks, SLOs, reports
 configs/                example scenario files
 docs/                   configuration reference and implementation plans
@@ -74,4 +74,14 @@ starts with a test that reproduces the bug.
 
 Versions follow [SemVer](https://semver.org). To cut a release, bump the crate
 versions, move the *Unreleased* changelog section under the new version with a
-date, and tag `vX.Y.Z`.
+date, and tag `vX.Y.Z`. The tag triggers `.github/workflows/release.yml`,
+which builds every target, smoke-tests it, and attaches each archive with a
+`.sha256` checksum (which `scripts/install.sh` requires). A PR that touches the
+workflow, the install script or the workspace `Cargo.toml` runs the same builds
+without publishing; `make test-install` tests the script locally.
+
+Both crates go to crates.io, engine first: `cargo publish -p redliner-volley`,
+then `cargo publish -p redliner`. The engine's package name is
+`redliner-volley` because `volley` belongs to an unrelated crate; redliner
+renames the dependency back to `volley`. CI runs `cargo package --workspace`,
+which builds the packaged `redliner` against the packaged engine.

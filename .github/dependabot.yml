@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Weekly, grouped so routine bumps arrive as one PR per ecosystem. CI's
+  # msrv job catches an update that raises the minimum supported Rust.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

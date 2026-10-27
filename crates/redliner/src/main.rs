@@ -1,6 +1,9 @@
 use clap::Parser;
 use redliner::{run, Args, Exit};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
