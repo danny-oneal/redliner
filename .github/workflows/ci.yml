@@ -17,7 +17,7 @@ jobs:
     name: test & lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -41,11 +41,11 @@ jobs:
     name: msrv (1.88)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Keep in step with `rust-version` in the crate manifests.
       - name: Install Rust 1.88
-        uses: dtolnay/rust-toolchain@1.88
+        uses: dtolnay/rust-toolchain@1.120
 
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
@@ -58,7 +58,7 @@ jobs:
     name: install script
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Shellcheck
         run: shellcheck -s sh scripts/install.sh scripts/test-install.sh
