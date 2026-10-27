@@ -252,6 +252,9 @@ Each pool is keyed by name. `type` selects the source:
 | `list`  | `values: [...]`   | a random element per draw; numbers keep their native type |
 | `range` | `min`, `max`      | a random integer in `min..=max` |
 | `file`  | `path`, `as`      | one line per entry; `as: int` (default `string`) parses to integers; blank lines and `#` comments are skipped |
+| `uuid`  | —                 | a new random (v4) UUID string per draw, from `load.seed` |
+| `sequence` | `start`        | the next integer per draw: `start`, `start+1`, ... (default `start: 1`) |
+| `timestamp` | `as`          | the time of the draw: `rfc3339` (default, e.g. `2026-01-02T03:04:05.678Z`), `unix` (seconds) or `unix_ms`; `unix`/`unix_ms` are integers |
 
 ```yaml
 data:
@@ -259,9 +262,20 @@ data:
     ids:          { type: range, min: 1, max: 1000 }
     country_codes:{ type: list,  values: [US, CA] }
     skus:         { type: file,  path: skus.txt, as: string }
+    order_refs:   { type: uuid }
+    order_no:     { type: sequence, start: 1000 }
+    sent_at:      { type: timestamp, as: unix_ms }
 ```
 
 File paths resolve relative to the config file.
+
+Every placeholder is its own draw, so `{{order_no}}` twice in one body gives
+two different numbers. The generator pools are unique *within* a run: the
+sequence restarts at `start` and a fixed `load.seed` repeats the same UUIDs,
+which is what makes a run reproducible. When values must also differ from the
+previous run (idempotency keys against a persistent store), leave `seed` at
+`0` (time-based) or pass a new `--seed`. `timestamp` reads the clock, so it is
+the one pool a seed can't reproduce.
 
 ### `data.harvest`
 

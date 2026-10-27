@@ -31,7 +31,9 @@ binary (`redliner`).
   `ramp`, and `steps` (to find the throughput knee).
 - **Data pools & templating:** `{{pool}}` placeholders in paths, bodies, and
   GraphQL variables, sampled from `list` / `range` / `file` pools or values
-  **harvested** from the live service by JSON path.
+  **harvested** from the live service by JSON path. `uuid`, `sequence` and
+  `timestamp` pools generate unique values (idempotency keys, emails,
+  correlation IDs) with no setup.
 - **App-layer checks:** reclassify a `200`-with-GraphQL-`errors` or an
   out-of-set status as a failure, so the success rate tells the truth.
 - **SLO gate:** success rate, p50/p95/p99, and throughput thresholds decide the
