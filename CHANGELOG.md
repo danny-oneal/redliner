@@ -35,6 +35,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still takes precedence, `--header` also adds to a config file's
   `target.headers`, and running with neither a config nor `--url` now says so
   in one line instead of failing to read `redliner.yaml`.
+- **SLO flags** — `--slo-success-rate`, `--slo-p50`, `--slo-p95`, `--slo-p99`
+  and `--slo-throughput-min` override the `slos` block, so a zero-config run
+  can gate CI in one line (`redliner --url ... --slo-p95 200ms`). `0`/`0s`
+  turns a file's SLO off.
 - **Graceful Ctrl-C** — the first Ctrl-C stops firing, lets in-flight requests
   finish, and writes the full report directory from the partial results
   (`"aborted": true` in `run_manifest.json`, an `INTERRUPTED` line in the
@@ -49,6 +53,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `~/.local/bin`.
 
 ### Changed
+- `slos.success_rate` must be a fraction from 0 to 1 and `slos.throughput_min`
+  must be >= 0 (exit `2`). A percentage such as `99.5` used to be accepted and
+  then failed every run.
 - The engine crate is now the `redliner-volley` package (`volley` on
   crates.io is an unrelated crate), so both crates can be published. Code
   still imports it as `volley`; a git or path dependency on it needs

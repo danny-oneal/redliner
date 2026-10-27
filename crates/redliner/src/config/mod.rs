@@ -604,6 +604,19 @@ impl Config {
                 ));
             }
         }
+        let s = &self.slos;
+        if !(0.0..=1.0).contains(&s.success_rate) {
+            errs.push(format!(
+                "slos.success_rate must be a fraction from 0 to 1 (e.g. 0.995), got {}",
+                s.success_rate
+            ));
+        }
+        if !(s.throughput_min >= 0.0 && s.throughput_min.is_finite()) {
+            errs.push(format!(
+                "slos.throughput_min must be >= 0, got {}",
+                s.throughput_min
+            ));
+        }
         if let Some(every) = self.report.live_stats.map(|d| d.as_std()) {
             if !every.is_zero() && every < Duration::from_millis(100) {
                 errs.push(format!(

@@ -83,6 +83,9 @@ redliner --url https://api.example.com/health
 redliner --url https://api.example.com/orders --method POST --body '{"sku":"A1"}' \
   -H 'Authorization: Bearer abc' --rate 50 --duration 1m
 
+# ...as a CI gate: exit 1 unless p95 <= 200ms and 99.5% succeed
+redliner --url https://api.example.com/health --slo-p95 200ms --slo-success-rate 0.995
+
 # GraphQL catalog server
 redliner --config configs/graphql-catalog.yaml
 
@@ -103,8 +106,8 @@ redliner --config configs/replay-example.yaml --replay prod.jsonl --speed 2
 current directory. If there's none, `--url` alone is enough: the URL's path and
 query become a single REST scenario (named e.g. `GET /health`), and every other
 setting takes its default (`poisson` at 200 rps for 30s, 2xx/3xx counts as
-success, no SLOs). `--rate`, `--duration`, `--seed` and the other flags still
-apply. Credentials in the URL are rejected; pass them with `-H` instead.
+success, no SLOs unless you pass `--slo-*` flags). `--rate`, `--duration`,
+`--seed` and the other flags still apply. Credentials in the URL are rejected; pass them with `-H` instead.
 
 **Exit codes:** `0` run passed · `1` an SLO was violated · `2` config or
 runtime error · `130` interrupted.
@@ -162,6 +165,9 @@ one request to benchmark.
 | `--seed`      | `load.seed`    | fix for a reproducible run              |
 | `--out`       | `report.dir`   |                                         |
 | `--live-stats`| `report.live_stats` | progress line interval, e.g. `5s`; `0s` turns it off |
+| `--slo-success-rate` | `slos.success_rate` | fraction, e.g. `0.995` |
+| `--slo-p50` / `--slo-p95` / `--slo-p99` | `slos.p50` / `p95` / `p99` | max latency, e.g. `200ms`; `0s` turns a file's SLO off |
+| `--slo-throughput-min` | `slos.throughput_min` | successful requests per second |
 | `--validate`  | —              | validate the config and exit `0`        |
 | `--replay`    | `replay.source`| replay a JSONL/HAR log instead of a load profile |
 | `--speed`     | `replay.speed` | replay time compression (needs replay)  |
@@ -278,6 +284,9 @@ is impossible to miss in a scrollback or CI log.
 - run: redliner --config configs/rest-example.yaml
   # a non-zero exit fails the job on an SLO violation;
   # upload reports/latest/junit.xml to surface SLOs as test results
+
+# No config file: gate one endpoint straight from the command line
+- run: redliner --url https://staging.example.com/health --rate 50 --duration 1m --slo-p95 300ms
 ```
 
 ## Run in K3s
