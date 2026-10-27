@@ -56,6 +56,7 @@ grep -q "^volley = .*version = \"=$version\"" crates/redliner/Cargo.toml ||
     die "could not pin the engine dependency in crates/redliner/Cargo.toml"
 
 today=$(date +%Y-%m-%d)
+# shellcheck disable=SC2016 # $0 and $2 are awk fields, not shell expansions.
 rewrite CHANGELOG.md awk -v v="$version" -v today="$today" -v prev="$previous" '
     $0 == "## [Unreleased]" { print; print ""; print "## [" v "] - " today; next }
     /^\[Unreleased\]: / {

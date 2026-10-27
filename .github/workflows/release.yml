@@ -135,7 +135,9 @@ jobs:
         run: |
           bin="target/${{ matrix.target }}/release/redliner"
           # The binary reports the version it's released as.
-          "$bin" --version | tee /dev/stderr | grep -qx "redliner ${{ needs.plan.outputs.version }}"
+          reported=$("$bin" --version)
+          echo "$reported"
+          [ "$reported" = "redliner ${{ needs.plan.outputs.version }}" ]
           if [ "${{ matrix.musl }}" = "true" ]; then
             file "$bin" | tee /dev/stderr | grep -q "statically linked\|static-pie linked"
           fi
