@@ -173,7 +173,7 @@ jobs:
 
   # Only after every target built, so a release never goes out half-populated.
   release:
-    name: publish ${{ needs.plan.outputs.tag }}
+    name: publish
     needs: [plan, build]
     if: needs.plan.outputs.release == 'true'
     runs-on: ubuntu-latest
