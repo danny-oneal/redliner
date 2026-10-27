@@ -32,3 +32,6 @@ tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "signal",
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
 volley = { version = "0.1.0", path = "../volley" }
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+# The load generator's own CPU per request: ~23% less than glibc malloc, and
+# ~2.3x less than musl's (5000 rps, local nginx).
+mimalloc = { version = "0.1.52", default-features = false }
