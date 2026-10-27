@@ -2,7 +2,9 @@
 
 A Redliner run is driven by one YAML file (`--config`). CLI flags override
 individual values but the file is the source of truth. Unknown keys are
-rejected, so a typo fails the run before any traffic.
+rejected, so a typo fails the run before any traffic. With no file at all,
+`redliner --url <url>` benchmarks one endpoint with every value below at its
+default (see the README).
 
 Durations use Go syntax: `250ms`, `2m`, `1h30m`, `0`.
 

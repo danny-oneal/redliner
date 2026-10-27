@@ -10,8 +10,8 @@ use tokio::sync::watch;
 use volley::{Attacker, AttackerConfig, ConstantPacer, Metrics, Pacer};
 
 use crate::checks::Checker;
-use crate::cli::Args;
-use crate::config::{load_config_file_with, Config};
+use crate::cli::{Args, ConfigSource, DEFAULT_CONFIG};
+use crate::config::{load_config_file_with, load_config_with, Config, Protocol};
 use crate::data;
 use crate::encode::{new_encoder, MixTargeter};
 use crate::live::Live;
@@ -22,6 +22,9 @@ use crate::replay::targeter::{SchedulePacer, ScheduleTargeter};
 use crate::replay::{build_replay, ReplaySummary};
 use crate::report::{self, Collector, RunManifest};
 use crate::slo::{self, fmt_dur, SloResult};
+
+/// Stands in for the config file name when the run comes from `--url` alone.
+const URL_CONFIG: &str = "(command line)";
 
 /// Process exit status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,7 +106,26 @@ async fn run_inner<F>(args: Args, interrupt: F) -> anyhow::Result<Exit>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
-    let cfg = load_config_file_with(&args.config, |c| args.apply_overrides(c))?;
+    let source = args
+        .config_source(Path::new(DEFAULT_CONFIG).exists())
+        .map_err(anyhow::Error::msg)?;
+    let (cfg, config_label) = match source {
+        ConfigSource::File(path) => {
+            let cfg = load_config_file_with(&path, |c| args.apply_overrides(c))?;
+            (cfg, path.display().to_string())
+        }
+        ConfigSource::Url => {
+            let (origin, scenario) = args.url_request().map_err(anyhow::Error::msg)?;
+            let label = Path::new(URL_CONFIG);
+            let cfg = load_config_with(label, Config::default(), |c| {
+                args.apply_overrides(c);
+                c.target.url = origin;
+                c.target.protocol = Protocol::Rest;
+                c.scenarios = vec![scenario];
+            })?;
+            (cfg, URL_CONFIG.to_string())
+        }
+    };
     // Replay knobs without a replay target are one clear error, not a cascade.
     args.check_replay_knobs(cfg.replay.is_some())
         .map_err(anyhow::Error::msg)?;
@@ -123,7 +145,7 @@ where
         };
         println!(
             "{}: valid ({}, {} scenarios, {mode})",
-            args.config.display(),
+            config_label,
             proto.as_str().unwrap_or("?"),
             cfg.scenarios.len(),
         );
@@ -173,7 +195,7 @@ where
     let mut manifest = RunManifest {
         started_at: report::utc_rfc3339(wall_start),
         finished_at: None,
-        config_file: args.config.display().to_string(),
+        config_file: config_label,
         config: cfg.clone(),
         seed: cfg.load.seed,
         requests: None,

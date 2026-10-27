@@ -617,3 +617,102 @@ async fn e2e_live_stats_off() {
     assert_eq!(code, Some(0), "stderr: {stderr}");
     assert!(!stderr.contains("[live "), "stderr: {stderr}");
 }
+
+/// The mock's origin, without the `/graphql` path.
+fn origin(mock: &Mock) -> String {
+    mock.url.trim_end_matches("/graphql").to_string()
+}
+
+#[tokio::test]
+async fn e2e_zero_config_url_benchmarks_one_endpoint() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("zero");
+    let url = format!("{}/items?limit=5", origin(&mock));
+    let out = dir.to_str().unwrap();
+    let args = Args::parse_from([
+        "redliner", "--url", &url, "--rate", "50", "--duration", "1s", "--live-stats", "0s",
+        "--out", out,
+    ]);
+    assert_eq!(run(args).await, Exit::Ok);
+
+    let lines = mock.lines.lock().unwrap().clone();
+    assert!(lines.len() > 10, "expected requests, saw {}", lines.len());
+    assert!(lines.iter().all(|l| l == "GET /items?limit=5 HTTP/1.1"), "{lines:?}");
+    let manifest = read_manifest(&dir);
+    assert_eq!(manifest["config_file"], "(command line)");
+    assert_eq!(manifest["config"]["scenarios"][0]["name"], "GET /items");
+}
+
+#[tokio::test]
+async fn e2e_zero_config_sends_method_and_body() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("zero-post");
+    let url = format!("{}/items", origin(&mock));
+    let out = dir.to_str().unwrap();
+    let args = Args::parse_from([
+        "redliner", "--url", &url, "--method", "POST", "--body", r#"{"a":1}"#, "--rate", "50",
+        "--duration", "1s", "--live-stats", "0s", "--out", out,
+    ]);
+    assert_eq!(run(args).await, Exit::Ok);
+
+    let lines = mock.lines.lock().unwrap().clone();
+    assert!(!lines.is_empty());
+    assert!(lines.iter().all(|l| l == "POST /items HTTP/1.1"), "{lines:?}");
+    let bodies = mock.bodies.lock().unwrap();
+    assert!(bodies.iter().all(|b| b == r#"true|{"a":1}"#), "{bodies:?}");
+}
+
+#[tokio::test]
+async fn e2e_zero_config_validate_fires_nothing() {
+    let mock = spawn_mock().await;
+    let url = format!("{}/items", origin(&mock));
+    let args = Args::parse_from(["redliner", "--url", &url, "--validate"]);
+    assert_eq!(run(args).await, Exit::Ok);
+    assert_eq!(mock.hits.load(Ordering::SeqCst), 0);
+}
+
+
+/// Runs the binary in `cwd` with only `args`, returning (exit code, stderr).
+async fn run_binary_in(cwd: &std::path::Path, args: &[&str]) -> (Option<i32>, String) {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_redliner"));
+    cmd.current_dir(cwd).args(args);
+    let out = tokio::task::spawn_blocking(move || cmd.output().unwrap()).await.unwrap();
+    (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_zero_config_validates_flags_like_a_config() {
+    let dir = tempdir("zero-invalid");
+    let (code, stderr) =
+        run_binary_in(&dir, &["--url", "http://127.0.0.1:9/x", "--rate=-1", "--validate"]).await;
+    assert_eq!(code, Some(2), "stderr: {stderr}");
+    assert!(stderr.contains("(command line): invalid config"), "{stderr}");
+    assert!(stderr.contains("load.rate must be > 0"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_no_config_and_no_url_explains_both() {
+    let dir = tempdir("no-config");
+    let (code, stderr) = run_binary_in(&dir, &[]).await;
+    assert_eq!(code, Some(2), "stderr: {stderr}");
+    assert!(stderr.contains("--config <file>") && stderr.contains("--url <url>"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_redliner_yaml_in_cwd_beats_zero_config() {
+    // `--url` with a redliner.yaml present keeps its old meaning: override
+    // target.url in that file (a GraphQL scenario here), not zero-config.
+    let mock = spawn_mock().await;
+    let dir = tempdir("cwd-yaml");
+    let cfg = write_cfg(&dir, "http://unused.invalid", "");
+    std::fs::rename(cfg, dir.join("redliner.yaml")).unwrap();
+    let (code, stderr) = run_binary_in(
+        &dir,
+        &["--url", &mock.url, "--live-stats", "0s", "--out", dir.to_str().unwrap()],
+    )
+    .await;
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    let lines = mock.lines.lock().unwrap().clone();
+    assert!(!lines.is_empty());
+    assert!(lines.iter().all(|l| l.starts_with("POST /graphql")), "{lines:?}");
+}

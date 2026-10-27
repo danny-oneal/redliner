@@ -4,18 +4,39 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::config::{Config, ConfigDuration};
+use crate::config::{Config, ConfigDuration, RequestConfig, Scenario};
+
+/// Read when `--config` is not given, if it exists.
+pub const DEFAULT_CONFIG: &str = "redliner.yaml";
+
+/// Where a run's config comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigSource {
+    File(PathBuf),
+    /// No file: one REST request built from `--url`, `--method` and `--body`.
+    Url,
+}
 
 /// Redliner: SLO-driven HTTP load testing.
 #[derive(Parser, Debug, Clone)]
 #[command(name = "redliner", version)]
 pub struct Args {
-    /// Scenario config file (YAML).
-    #[arg(long, default_value = "redliner.yaml")]
-    pub config: PathBuf,
-    /// Override target.url.
+    /// Scenario config file (YAML) [default: redliner.yaml]. Without one,
+    /// --url benchmarks that single endpoint.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+    /// Override target.url; without a config file, the endpoint to benchmark.
     #[arg(long)]
     pub url: Option<String>,
+    /// HTTP method of the --url request (no config file only; default GET).
+    #[arg(long)]
+    pub method: Option<String>,
+    /// Body of the --url request (no config file only).
+    #[arg(long)]
+    pub body: Option<String>,
+    /// Add a header to every request: "Name: value" (repeatable).
+    #[arg(long, short = 'H', value_name = "NAME: VALUE", value_parser = parse_header)]
+    pub header: Vec<(String, String)>,
     /// Override load.rate (RPS).
     #[arg(long)]
     pub rate: Option<f64>,
@@ -56,6 +77,9 @@ impl Args {
     pub fn apply_overrides(&self, cfg: &mut Config) {
         if let Some(u) = &self.url {
             cfg.target.url = u.clone();
+        }
+        for (k, v) in &self.header {
+            cfg.target.headers.insert(k.clone(), v.clone());
         }
         if let Some(r) = self.rate {
             cfg.load.rate = r;
@@ -100,6 +124,63 @@ impl Args {
         }
     }
 
+    /// Picks the config: `--config`, else `redliner.yaml` if it exists
+    /// (`default_exists`), else zero-config from `--url`.
+    pub fn config_source(&self, default_exists: bool) -> Result<ConfigSource, String> {
+        let source = match &self.config {
+            Some(p) => ConfigSource::File(p.clone()),
+            None if default_exists => ConfigSource::File(PathBuf::from(DEFAULT_CONFIG)),
+            None if self.url.is_some() => ConfigSource::Url,
+            None => {
+                return Err("no config: pass --config <file>, add a redliner.yaml here, or \
+                            benchmark one endpoint with --url <url>"
+                    .into())
+            }
+        };
+        if matches!(source, ConfigSource::File(_)) && (self.method.is_some() || self.body.is_some())
+        {
+            return Err("--method and --body describe the --url request; with a config file, \
+                        set them in a scenario"
+                .into());
+        }
+        Ok(source)
+    }
+
+    /// The zero-config request: `--url` split into the origin (`target.url`)
+    /// and one scenario for its path and query.
+    pub fn url_request(&self) -> Result<(String, Scenario), String> {
+        let raw = self.url.as_deref().unwrap_or_default();
+        let url = reqwest::Url::parse(raw).map_err(|e| format!("--url {raw:?}: {e}"))?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(format!("--url {raw:?}: only http and https are supported"));
+        }
+        // The URL would land in reports; don't echo it either.
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err("--url: credentials in the URL are not supported; use --header or a \
+                        config with target.auth"
+                .into());
+        }
+        let method = self.method.as_deref().unwrap_or("GET").to_ascii_uppercase();
+        let mut path = url.path().to_string();
+        let name = format!("{method} {path}");
+        if let Some(q) = url.query() {
+            path.push('?');
+            path.push_str(q);
+        }
+        let scenario = Scenario {
+            name,
+            weight: 1.0,
+            request: RequestConfig {
+                method,
+                path,
+                body: self.body.clone().unwrap_or_default(),
+                ..Default::default()
+            },
+            matcher: None,
+        };
+        Ok((url.origin().ascii_serialization(), scenario))
+    }
+
     /// One clear error when a replay knob was passed with no replay target,
     /// instead of the pile of validation errors a synthesized empty replay
     /// block would raise. `has_replay` is whether the loaded config is in
@@ -112,6 +193,14 @@ impl Args {
             );
         }
         Ok(())
+    }
+}
+
+/// `"Name: value"`, trimmed; the name must not be empty.
+fn parse_header(s: &str) -> Result<(String, String), String> {
+    match s.split_once(':') {
+        Some((k, v)) if !k.trim().is_empty() => Ok((k.trim().to_string(), v.trim().to_string())),
+        _ => Err(format!("expected \"Name: value\", got {s:?}")),
     }
 }
 
@@ -205,5 +294,115 @@ mod tests {
             .check_replay_knobs(true)
             .is_ok());
         assert!(Args::parse_from(["redliner"]).check_replay_knobs(false).is_ok());
+    }
+
+    #[test]
+    fn explicit_config_wins() {
+        let args = Args::parse_from(["redliner", "--config", "x.yaml", "--url", "http://h/"]);
+        assert_eq!(
+            args.config_source(true).unwrap(),
+            ConfigSource::File(PathBuf::from("x.yaml"))
+        );
+    }
+
+    #[test]
+    fn redliner_yaml_is_still_the_default() {
+        let args = Args::parse_from(["redliner", "--url", "http://h/"]);
+        assert_eq!(
+            args.config_source(true).unwrap(),
+            ConfigSource::File(PathBuf::from(DEFAULT_CONFIG))
+        );
+    }
+
+    #[test]
+    fn url_without_a_config_file_is_zero_config() {
+        let args = Args::parse_from(["redliner", "--url", "http://h/"]);
+        assert_eq!(args.config_source(false).unwrap(), ConfigSource::Url);
+    }
+
+    #[test]
+    fn no_config_and_no_url_is_one_error() {
+        let e = Args::parse_from(["redliner"]).config_source(false).unwrap_err();
+        assert_eq!(
+            e,
+            "no config: pass --config <file>, add a redliner.yaml here, or benchmark one endpoint with --url <url>"
+        );
+    }
+
+    #[test]
+    fn method_and_body_need_zero_config() {
+        let msg = "--method and --body describe the --url request; with a config file, set them in a scenario";
+        for extra in [["--method", "POST"], ["--body", "{}"]] {
+            let mut v = vec!["redliner", "--config", "x.yaml"];
+            v.extend_from_slice(&extra);
+            assert_eq!(Args::parse_from(v).config_source(false).unwrap_err(), msg);
+        }
+    }
+
+    #[test]
+    fn url_request_splits_origin_and_path() {
+        let args = Args::parse_from([
+            "redliner",
+            "--url",
+            "http://127.0.0.1:8080/api/items?limit=5#frag",
+        ]);
+        let (origin, sc) = args.url_request().unwrap();
+        assert_eq!(origin, "http://127.0.0.1:8080");
+        assert_eq!(sc.name, "GET /api/items");
+        assert_eq!(sc.weight, 1.0);
+        assert_eq!(sc.request.method, "GET");
+        assert_eq!(sc.request.path, "/api/items?limit=5");
+        assert!(sc.request.body.is_empty());
+    }
+
+    #[test]
+    fn url_request_takes_method_and_body() {
+        let args = Args::parse_from([
+            "redliner",
+            "--url",
+            "https://api.example.com",
+            "--method",
+            "post",
+            "--body",
+            r#"{"a":1}"#,
+        ]);
+        let (origin, sc) = args.url_request().unwrap();
+        assert_eq!(origin, "https://api.example.com");
+        assert_eq!(sc.name, "POST /");
+        assert_eq!(sc.request.method, "POST");
+        assert_eq!(sc.request.path, "/");
+        assert_eq!(sc.request.body, r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn url_request_rejects_bad_urls() {
+        for (url, want) in [
+            ("not a url", "--url \"not a url\": relative URL without a base"),
+            ("ftp://h/x", "--url \"ftp://h/x\": only http and https are supported"),
+            (
+                "http://user:pw@h/x",
+                "--url: credentials in the URL are not supported; use --header or a config with target.auth",
+            ),
+        ] {
+            let e = Args::parse_from(["redliner", "--url", url]).url_request().unwrap_err();
+            assert_eq!(e, want);
+        }
+    }
+
+    #[test]
+    fn header_flags_add_target_headers() {
+        let mut cfg = Config::default();
+        cfg.target.headers.insert("X-Keep".into(), "k".into());
+        Args::parse_from(["redliner", "-H", "X-A: 1", "--header", "X-B:two words "])
+            .apply_overrides(&mut cfg);
+        assert_eq!(cfg.target.headers["X-Keep"], "k");
+        assert_eq!(cfg.target.headers["X-A"], "1");
+        assert_eq!(cfg.target.headers["X-B"], "two words");
+    }
+
+    #[test]
+    fn header_without_a_colon_is_rejected() {
+        assert!(Args::try_parse_from(["redliner", "-H", "nocolon"]).is_err());
+        assert!(Args::try_parse_from(["redliner", "-H", ": v"]).is_err());
     }
 }
