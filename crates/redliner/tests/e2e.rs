@@ -648,6 +648,145 @@ async fn e2e_zero_config_url_benchmarks_one_endpoint() {
 }
 
 #[tokio::test]
+async fn e2e_manifest_redacts_header_credentials() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("redact");
+    let url = format!("{}/items", origin(&mock));
+    let out = dir.to_str().unwrap();
+    let args = Args::parse_from([
+        "redliner", "--url", &url, "--rate", "20", "--duration", "1s", "--live-stats", "0s",
+        "--out", out, "-H", "Authorization: Bearer SUPERSECRET", "-H", "X-Api-Key: k123",
+        "-H", "Accept: application/json",
+    ]);
+    assert_eq!(run(args).await, Exit::Ok);
+
+    // The target still gets the real credential...
+    let heads = mock.heads.lock().unwrap().clone();
+    assert!(!heads.is_empty() && heads[0].contains("SUPERSECRET"), "{heads:?}");
+    // ...but the audit trail on disk does not.
+    let raw = std::fs::read_to_string(newest_report(&dir).join("run_manifest.json")).unwrap();
+    assert!(!raw.contains("SUPERSECRET") && !raw.contains("k123"), "{raw}");
+    let manifest = read_manifest(&dir);
+    let headers = &manifest["config"]["target"]["headers"];
+    assert_eq!(headers["Authorization"], "<redacted>");
+    assert_eq!(headers["X-Api-Key"], "<redacted>");
+    assert_eq!(headers["Accept"], "application/json");
+}
+
+#[tokio::test]
+async fn e2e_fractional_constant_rate_fires() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("fractional");
+    let cfg = write_cfg(&dir, &mock.url, "");
+    // 2.5 rps for 2s: hits due at 0.4, 0.8, 1.2 and 1.6s; the one due at 2.0s
+    // falls on the deadline. Truncating to 2 rps fired 3.
+    let extra = ["--out", dir.to_str().unwrap(), "--rate", "2.5", "--duration", "2s"];
+    assert_eq!(run(args(&cfg, &extra)).await, Exit::Ok);
+    assert_eq!(mock.hits.load(Ordering::SeqCst), 4);
+}
+
+/// `--url` args aimed at a port nothing listens on.
+fn dead_target_args(out: &str, duration: &str) -> Args {
+    Args::parse_from([
+        "redliner", "--url", "http://127.0.0.1:1/", "--rate", "20", "--duration", duration,
+        "--live-stats", "0s", "--out", out,
+    ])
+}
+
+fn has_slo(manifest: &serde_json::Value, name: &str) -> bool {
+    manifest["slo_results"]
+        .as_array()
+        .is_some_and(|rs| rs.iter().any(|r| r["name"] == name))
+}
+
+#[tokio::test]
+async fn e2e_dead_target_without_slos_exits_one() {
+    let dir = tempdir("dead");
+    assert_eq!(run(dead_target_args(dir.to_str().unwrap(), "1s")).await, Exit::SloFailed);
+
+    let manifest = read_manifest(&dir);
+    assert_eq!(manifest["passed"], false);
+    let r = manifest["slo_results"]
+        .as_array()
+        .and_then(|rs| rs.iter().find(|r| r["name"] == "successful_requests"))
+        .expect("successful_requests result")
+        .clone();
+    assert_eq!(r["passed"], false);
+    let observed = r["observed"].as_str().unwrap();
+    assert!(observed.starts_with("0 of ") && observed != "0 of 0", "{observed}");
+}
+
+#[tokio::test]
+async fn e2e_all_checks_failed_without_slos_exits_one() {
+    // Every response is a 200 carrying GraphQL `errors`: answered, never succeeded.
+    let mock = spawn_error_mock().await;
+    let dir = tempdir("allfail");
+    let cfg = write_cfg(&dir, &mock.url, "");
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::SloFailed);
+    assert!(mock.hits.load(Ordering::SeqCst) > 10);
+    assert!(has_slo(&read_manifest(&dir), "successful_requests"));
+}
+
+/// Answers every request with `404 Not Found`; for bodiless GETs only.
+async fn spawn_404_mock() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let hits = Arc::new(AtomicUsize::new(0));
+    let h = hits.clone();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let h = h.clone();
+            tokio::spawn(async move {
+                let mut data = Vec::new();
+                let mut buf = [0u8; 4096];
+                while !data.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => data.extend_from_slice(&buf[..n]),
+                    }
+                }
+                h.fetch_add(1, Ordering::SeqCst);
+                let _ = sock
+                    .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+            });
+        }
+    });
+    (origin, hits)
+}
+
+#[tokio::test]
+async fn e2e_allowed_non_2xx_status_passes_without_slos() {
+    // `checks.status` defines success; a 404 it allows is not a failed run.
+    let (origin, hits) = spawn_404_mock().await;
+    let dir = tempdir("allow404");
+    let cfg = dir.join("cfg.yaml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "target:\n  url: {origin}\n  protocol: rest\nload:\n  profile: constant\n  rate: 20\n  duration: 1s\n\
+             checks:\n  status: [404]\nscenarios:\n  - {{name: gone, weight: 1, request: {{method: GET, path: /gone}}}}\n"
+        ),
+    )
+    .unwrap();
+    let extra = ["--out", dir.to_str().unwrap(), "--live-stats", "0s"];
+    assert_eq!(run(args(&cfg, &extra)).await, Exit::Ok);
+    assert!(hits.load(Ordering::SeqCst) > 10);
+}
+
+#[tokio::test]
+async fn e2e_interrupted_dead_target_exits_130() {
+    let dir = tempdir("dead-int");
+    let exit = run_with_interrupt(
+        dead_target_args(dir.to_str().unwrap(), "30s"),
+        tokio::time::sleep(std::time::Duration::from_millis(500)),
+    )
+    .await;
+    assert_eq!(exit, Exit::Interrupted);
+    assert!(!has_slo(&read_manifest(&dir), "successful_requests"));
+}
+
+#[tokio::test]
 async fn e2e_zero_config_sends_method_and_body() {
     let mock = spawn_mock().await;
     let dir = tempdir("zero-post");

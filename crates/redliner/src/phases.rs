@@ -16,16 +16,12 @@ pub struct Phase {
     pub rate: f64,
 }
 
-fn per_sec(rate: f64) -> ConstantPacer {
-    ConstantPacer { freq: rate as u64, per: Duration::from_secs(1) }
-}
-
 pub fn build_phases(load: &LoadConfig) -> anyhow::Result<Vec<Phase>> {
     let dur = load.duration.as_std();
     match load.profile.as_str() {
         "constant" => Ok(vec![Phase {
             name: "constant".into(),
-            pacer: Arc::new(per_sec(load.rate)),
+            pacer: Arc::new(ConstantPacer::from_rate(load.rate)),
             duration: dur,
             rate: load.rate,
         }]),
@@ -43,7 +39,7 @@ pub fn build_phases(load: &LoadConfig) -> anyhow::Result<Vec<Phase>> {
             Ok(vec![Phase {
                 name: "ramp".into(),
                 pacer: Arc::new(LinearPacer {
-                    start_freq: load.ramp.from.trunc(),
+                    start_freq: load.ramp.from,
                     slope_per_sec: (load.ramp.to - load.ramp.from) / secs,
                 }),
                 duration: dur,
@@ -56,7 +52,7 @@ pub fn build_phases(load: &LoadConfig) -> anyhow::Result<Vec<Phase>> {
             .enumerate()
             .map(|(i, s)| Phase {
                 name: format!("step-{}({} rps)", i + 1, s.rate),
-                pacer: Arc::new(per_sec(s.rate)),
+                pacer: Arc::new(ConstantPacer::from_rate(s.rate)),
                 duration: s.duration.as_std(),
                 rate: s.rate,
             })
@@ -72,6 +68,31 @@ mod tests {
 
     fn step(rate: f64, secs: u64) -> Step {
         Step { rate, duration: ConfigDuration(Duration::from_secs(secs)) }
+    }
+
+    #[test]
+    fn build_phases_keeps_fractional_rates() {
+        let at_start = |load: LoadConfig| build_phases(&load).unwrap()[0].pacer.rate(Duration::ZERO);
+        let constant = LoadConfig {
+            profile: "constant".into(),
+            rate: 2.5,
+            duration: ConfigDuration(Duration::from_secs(2)),
+            ..Default::default()
+        };
+        assert!((at_start(constant) - 2.5).abs() < 1e-9);
+        let steps = LoadConfig {
+            profile: "steps".into(),
+            steps: vec![Step { rate: 0.5, duration: ConfigDuration(Duration::from_secs(4)) }],
+            ..Default::default()
+        };
+        assert!((at_start(steps) - 0.5).abs() < 1e-9);
+        let ramp = LoadConfig {
+            profile: "ramp".into(),
+            ramp: RampConfig { from: 0.5, to: 2.5 },
+            duration: ConfigDuration(Duration::from_secs(10)),
+            ..Default::default()
+        };
+        assert!((at_start(ramp) - 0.5).abs() < 1e-9);
     }
 
     #[test]

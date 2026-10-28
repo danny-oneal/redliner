@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+- `run_manifest.json` no longer stores credential header values
+  (`Authorization`, `Cookie`, `*key*`, `*token*`, `*secret*`, …) from
+  `target.headers`, `-H`, or scenario and harvest headers; they are written as
+  `<redacted>`.
+
+### Changed
+- A run in which no request succeeded now exits `1` (built-in
+  `successful_requests` check) even with no SLOs configured; previously a
+  down target passed.
+
+### Fixed
+- `constant`, `steps` and `ramp` no longer truncate rates to whole numbers:
+  `rate: 0.5` fired nothing and `rate: 2.7` ran at 2 rps.
+- Validation rejects non-finite rates (`.nan`, `.inf`), and `constant` or
+  `steps` loads too small to fire a request (`rate × duration ≤ 1`).
+
 ## [0.4.0] - 2026-10-27
 
 ### Added

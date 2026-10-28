@@ -32,12 +32,21 @@ report:  { ... }  # optional
 | `url`        | string  | *required* | full endpoint for GraphQL; base URL for REST (scenario paths are appended) |
 | `protocol`   | enum    | `graphql`  | `graphql` \| `rest` |
 | `timeout`    | duration| `10s`      | per-request timeout |
-| `headers`    | map     | `{}`       | sent on every request |
+| `headers`    | map     | `{}`       | sent on every request; credential values are redacted in `run_manifest.json` (see below) |
 | `auth`       | object  | `none`     | see below; credentials are read from the environment, never the file |
 | `keep_alive` | bool    | `true`     | reuse pooled connections between requests |
 | `max_idle_conns` | int | `10000`    | max idle pooled connections per host |
 | `http2`      | bool    | `false`    | negotiate HTTP/2 with prior knowledge (cleartext h2c or a known h2 server) |
 | `insecure_tls` | bool  | `false`    | skip TLS certificate verification (`--insecure` / `-k`), for staging or in-cluster services with self-signed certs; covers the harvest probe too, and the run prints a warning when it's on |
+
+`run_manifest.json` records the config with the value of any header whose name
+contains `auth`, `cookie`, `key`, `token`, `secret`, `passw`, `session`,
+`credential`, `signature`, `jwt`, `dpop` or `bearer` (case-insensitive)
+replaced by `<redacted>`. This covers `target.headers`, `-H`, and scenario and
+harvest headers. Values in URLs, bodies, variables and pool `values` are
+written as-is: a header that takes a credential from a `{{pool}}` is redacted,
+but the pool's inline `values` are not. Keep credentials in literal headers or
+in `target.auth` (read from the environment).
 
 ### `target.auth`
 
@@ -63,7 +72,7 @@ auth:
 | key        | type     | default   | notes |
 | ---------- | -------- | --------- | ----- |
 | `profile`  | enum     | `poisson` | `constant` \| `poisson` \| `ramp` \| `steps` |
-| `rate`     | float    | `200`     | requests per second (`constant`, `poisson`) |
+| `rate`     | float    | `200`     | requests per second (`constant`, `poisson`); fractional rates such as `0.5` or `2.7` are honoured |
 | `duration` | duration | `30s`     | measured attack length (`constant`, `poisson`, `ramp`) |
 | `warmup`   | duration | `0`       | unmeasured warmup at 10% of the first phase's rate |
 | `ramp`     | object   | —         | `{ from, to }` rates for `profile: ramp` |
@@ -71,6 +80,13 @@ auth:
 | `workers`  | int      | `10`      | initial concurrency (informational) |
 | `max_workers` | int   | `100000`  | hard cap on in-flight requests |
 | `seed`     | int      | `0`       | `0` derives a seed from the wall clock and records it; a fixed value reproduces pacing and sampling exactly |
+
+Rates must be finite. `constant` and each `steps` entry must also satisfy
+`rate × duration > 1`: they fire their first hit at `1/rate`, and a hit due
+exactly at the end is not sent, so a smaller load fires nothing and is
+rejected (`poisson` and `ramp` fire their first hit at once). A load just over
+the line can still miss its only hit by the timer's millisecond resolution;
+the run then fails the `successful_requests` check.
 
 ```yaml
 # ramp: climb linearly from 50 to 500 rps over `duration`
@@ -396,6 +412,12 @@ Optional. Any threshold set is evaluated against the run's overall metrics; a
 single violation makes the process exit `1`. A threshold left at `0` is not
 enforced. Each one has a CLI override (`--slo-success-rate`, `--slo-p50`,
 `--slo-p95`, `--slo-p99`, `--slo-p999`, `--slo-throughput-min`).
+
+Independent of these thresholds, a run in which no request succeeded (none
+fired, or every one failed at the transport layer or a check; a status listed
+in `checks.status` counts as success) fails the
+built-in `successful_requests` check, listed with the SLOs and in `junit.xml`,
+and exits `1`. An interrupted run exits `130` instead.
 
 | key             | type     | notes |
 | --------------- | -------- | ----- |

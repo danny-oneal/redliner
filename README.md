@@ -115,8 +115,9 @@ setting takes its default (`poisson` at 200 rps for 30s, 2xx/3xx counts as
 success, no SLOs unless you pass `--slo-*` flags). `--rate`, `--duration`,
 `--seed` and the other flags still apply. Credentials in the URL are rejected; pass them with `-H` instead.
 
-**Exit codes:** `0` run passed · `1` an SLO was violated · `2` config or
-runtime error · `130` interrupted.
+**Exit codes:** `0` run passed · `1` an SLO was violated, a replay fell
+behind, or no request succeeded · `2` config or runtime error · `130`
+interrupted.
 
 **Ctrl-C** stops a run early without losing it: no new requests are fired,
 in-flight ones finish (up to `target.timeout`), and the report directory is
@@ -278,7 +279,7 @@ Each run writes `reports/<UTC timestamp>/` and refreshes a `latest` symlink:
 | `metrics.json`        | overall metrics (rate, throughput, success, latencies, status codes) |
 | `per_operation.json`  | requests / success / p50·p95·p99 per scenario |
 | `per_phase.json`      | per-phase metrics (written when more than one phase ran) |
-| `run_manifest.json`   | full config, seed, and SLO verdicts — the audit trail |
+| `run_manifest.json`   | full config (credential headers redacted), seed, and SLO verdicts — the audit trail |
 | `junit.xml`           | SLO results as test cases (when `report.junit: true`) |
 | `results.jsonl`       | raw per-request stream, one JSON object per line (when `report.keep_raw: true`) |
 

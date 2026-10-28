@@ -21,7 +21,7 @@ use crate::phases::{build_phases, Phase};
 use crate::replay::schedule::Schedule;
 use crate::replay::targeter::{SchedulePacer, ScheduleTargeter};
 use crate::replay::{build_replay, ReplaySummary};
-use crate::report::{self, Collector, RunManifest};
+use crate::report::{self, Collector, RedactedConfig, RunManifest};
 use crate::slo::{self, fmt_dur, SloResult};
 
 /// Stands in for the config file name when the run comes from `--url` alone.
@@ -208,7 +208,7 @@ where
         started_at: report::utc_rfc3339(wall_start),
         finished_at: None,
         config_file: config_label,
-        config: cfg.clone(),
+        config: RedactedConfig::from(&cfg),
         seed: cfg.load.seed,
         requests: None,
         slo_results: Vec::new(),
@@ -286,6 +286,18 @@ where
         }
     }
 
+    // A run where nothing succeeded measured nothing (the target is down, or
+    // every answer failed a check): fail it even when no SLO is enforced.
+    let mut none_succeeded = false;
+    if !interrupted {
+        if let Some(r) = slo::no_success(collector.overall(), checker.accepted()) {
+            eprintln!("{}", slo::no_success_warning(collector.overall()));
+            results.push(r);
+            none_succeeded = true;
+            passed = false;
+        }
+    }
+
     manifest.finished_at = Some(report::utc_rfc3339(SystemTime::now()));
     manifest.requests = Some(collector.overall().requests);
     manifest.slo_results = results.clone();
@@ -312,7 +324,7 @@ where
     if interrupted {
         return Ok(Exit::Interrupted);
     }
-    if fell_behind || (cfg.slos.enforced() && !passed) {
+    if fell_behind || none_succeeded || (cfg.slos.enforced() && !passed) {
         return Ok(Exit::SloFailed);
     }
     Ok(Exit::Ok)

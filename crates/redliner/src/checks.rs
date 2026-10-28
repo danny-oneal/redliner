@@ -8,6 +8,7 @@
 //! in the success rate, the SLO gate, and the error report.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 use volley::AttackResult;
@@ -19,6 +20,8 @@ pub struct Checker {
     /// Acceptable HTTP status codes; `None` accepts the default 2xx/3xx.
     statuses: Option<HashSet<u16>>,
     graphql_errors: bool,
+    /// Results that passed every check (see [`Checker::accepted`]).
+    accepted: AtomicU64,
 }
 
 impl Checker {
@@ -31,11 +34,31 @@ impl Checker {
         Self {
             statuses,
             graphql_errors: cfg.graphql_errors.unwrap_or(false),
+            accepted: AtomicU64::new(0),
         }
     }
 
+    /// How many applied results succeeded by this checker's definition: no
+    /// error, and a status in `checks.status` (2xx/3xx when that is empty).
+    pub fn accepted(&self) -> u64 {
+        self.accepted.load(Ordering::Relaxed)
+    }
+
     /// Mutates `r` in place; returns `true` if the result was reclassified.
+    /// Tallies the result towards [`Checker::accepted`].
     pub fn apply(&self, r: &mut AttackResult) -> bool {
+        let reclassified = self.reclassify(r);
+        let ok_status = match &self.statuses {
+            Some(statuses) => statuses.contains(&r.code),
+            None => (200..400).contains(&r.code),
+        };
+        if ok_status && r.error.as_deref().is_none_or(str::is_empty) {
+            self.accepted.fetch_add(1, Ordering::Relaxed);
+        }
+        reclassified
+    }
+
+    fn reclassify(&self, r: &mut AttackResult) -> bool {
         if r.error.as_deref().is_some_and(|e| !e.is_empty()) {
             return false; // transport already failed; keep the original error
         }
@@ -80,6 +103,7 @@ mod tests {
         Checker {
             statuses: statuses.map(|s| s.iter().copied().collect()),
             graphql_errors,
+            accepted: AtomicU64::new(0),
         }
     }
 
@@ -97,6 +121,22 @@ mod tests {
             url: "http://x".into(),
             body: body.to_vec(),
         }
+    }
+
+    #[test]
+    fn accepted_counts_the_checkers_verdict() {
+        // An allowed non-2xx status is a success; so is 2xx/3xx by default.
+        let allow_404 = checker(Some(&[404]), false);
+        allow_404.apply(&mut res(404, b"", None));
+        allow_404.apply(&mut res(200, b"", None));
+        assert_eq!(allow_404.accepted(), 1);
+
+        let default = checker(None, true);
+        default.apply(&mut res(200, b"{}", None));
+        default.apply(&mut res(500, b"", None));
+        default.apply(&mut res(0, b"", Some("connection refused")));
+        default.apply(&mut res(200, br#"{"errors":[{"message":"boom"}]}"#, None));
+        assert_eq!(default.accepted(), 1);
     }
 
     #[test]
