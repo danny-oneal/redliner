@@ -8,8 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - **`redliner compare <baseline> <candidate>`** prints the change between two
-  runs' reports: p50/p95/p99, throughput and success rate, overall and per
-  operation. With `--max-regression 10%`, it exits `1` when a latency
+  runs' reports: p50/p95/p99, throughput and success rate, overall, per load
+  phase (for `steps` runs) and per operation. With `--max-regression 10%`, it exits `1` when a latency
   percentile rises, or throughput falls, by more than 10% of the baseline,
   so CI can fail a build that got slower than the last one. It exits `2`
   when a report can't be read, and warns when the runs fired at different

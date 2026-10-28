@@ -16,7 +16,8 @@ adds a relative gate: "no worse than the baseline by more than N%". Goku's
 ## Goals
 
 - `redliner compare <baseline> <candidate>` prints the change in p50, p95,
-  p99, throughput and success rate, overall and per operation.
+  p99, throughput and success rate, overall, per load phase and per
+  operation.
 - `--max-regression <PERCENT>` turns the report into a gate: exit `1` on a
   regression, `0` otherwise, `2` when a report can't be read.
 
@@ -26,13 +27,14 @@ adds a relative gate: "no worse than the baseline by more than N%". Goku's
   report, a CI cache or artifact from main) is the user's pipeline's job.
 - Statistical significance testing. The reports hold percentiles, not
   samples, so a confidence interval isn't available without `results.jsonl`.
-- Per-phase comparison and JSON/JUnit output. These can be added later if
-  asked for.
+- JSON output. This can be added later if something needs to consume the
+  comparison in code.
 
 ## Decisions
 
 - **Inputs:** a report directory (including the `latest` symlink) or its
-  `metrics.json`. `per_operation.json` next to it is read when present.
+  `metrics.json`. `per_phase.json` and `per_operation.json` next to it are
+  read when present.
   Unknown fields are ignored, so older baselines keep working as reports
   grow.
 - **Gated metrics:**
@@ -46,6 +48,14 @@ adds a relative gate: "no worse than the baseline by more than N%". Goku's
 - **Per-operation rows are gated too.** That's where a regression in one
   endpoint shows up, before it moves the overall numbers. Operations present
   in only one run are listed, not compared.
+- **Per-phase rows are gated too** (added after the first version, at the
+  maintainer's request). Only `steps` runs write `per_phase.json`, and that's
+  where they matter: a regression near the throughput knee can double one
+  step's p99 while the run's overall p99 stays under the threshold. Phases
+  are matched by name (`step-3(200 rps)`), which includes the rate, so they
+  match only when both runs used the same steps. The others are listed as
+  "only in" the run that has them, with a `phase ` prefix. Phase rows have
+  no throughput, because `per_phase.json` doesn't record it.
 - **A zero baseline** has no percent change (`n/a`) and isn't gated.
 - **Different rates warn.** If the two runs fired at rates more than 5%
   apart, the comparison isn't like for like; compare warns on stderr rather

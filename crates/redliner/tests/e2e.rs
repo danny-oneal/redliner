@@ -865,3 +865,25 @@ async fn e2e_compare_gates_a_regression_between_real_runs() {
     assert_eq!(code, Some(2));
     assert!(stderr.contains("nope"), "{stderr}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_compare_includes_each_steps_phase() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("compare-phases");
+    let cfg = write_cfg(&dir, &mock.url, "");
+    let yaml = std::fs::read_to_string(&cfg).unwrap().replace(
+        "profile: constant\n  rate: 50\n  duration: 1s\n",
+        "profile: steps\n  steps:\n    - { rate: 20, duration: 500ms }\n    - { rate: 40, duration: 500ms }\n",
+    );
+    assert!(yaml.contains("profile: steps"), "{yaml}");
+    std::fs::write(&cfg, yaml).unwrap();
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
+    let b = newest_report(&dir);
+    let b = b.to_str().unwrap();
+
+    let (code, stdout, stderr) = run_compare(&[b, b, "--max-regression", "0%"]).await;
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("phase step-1(20 rps)"), "{stdout}");
+    assert!(stdout.contains("phase step-2(40 rps)"), "{stdout}");
+}
+
