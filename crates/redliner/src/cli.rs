@@ -40,6 +40,10 @@ pub struct Args {
     /// Add a header to every request: "Name: value" (repeatable).
     #[arg(long, short = 'H', value_name = "NAME: VALUE", value_parser = parse_header)]
     pub header: Vec<(String, String)>,
+    /// Skip TLS certificate verification (sets target.insecure_tls); for
+    /// self-signed test environments only.
+    #[arg(long, short = 'k')]
+    pub insecure: bool,
     /// Override load.rate (RPS).
     #[arg(long)]
     pub rate: Option<f64>,
@@ -120,6 +124,9 @@ impl Args {
         }
         for (k, v) in &self.header {
             cfg.target.headers.insert(k.clone(), v.clone());
+        }
+        if self.insecure {
+            cfg.target.insecure_tls = true;
         }
         if let Some(r) = self.rate {
             cfg.load.rate = r;
@@ -495,6 +502,21 @@ mod tests {
     fn header_without_a_colon_is_rejected() {
         assert!(Args::try_parse_from(["redliner", "-H", "nocolon"]).is_err());
         assert!(Args::try_parse_from(["redliner", "-H", ": v"]).is_err());
+    }
+
+    #[test]
+    fn insecure_flag_turns_off_certificate_checks() {
+        let mut cfg = Config::default();
+        Args::parse_from(["redliner"]).apply_overrides(&mut cfg);
+        assert!(!cfg.target.insecure_tls);
+        cfg.target.insecure_tls = true;
+        Args::parse_from(["redliner"]).apply_overrides(&mut cfg);
+        assert!(cfg.target.insecure_tls, "no flag keeps the file's setting");
+        for flag in ["-k", "--insecure"] {
+            let mut cfg = Config::default();
+            Args::parse_from(["redliner", flag]).apply_overrides(&mut cfg);
+            assert!(cfg.target.insecure_tls, "{flag}");
+        }
     }
 
     #[test]

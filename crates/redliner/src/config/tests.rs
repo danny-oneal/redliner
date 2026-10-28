@@ -491,3 +491,11 @@ fn replay_source_absolute_kept() {
         "/var/log/x.jsonl"
     );
 }
+
+#[test]
+fn insecure_tls_is_off_unless_set() {
+    let c = load_str(&format!("{GQL_HEAD}{ONE_GQL}")).unwrap();
+    assert!(!c.target.insecure_tls);
+    let c = load_str(&format!("{GQL_HEAD}  insecure_tls: true\n{ONE_GQL}")).unwrap();
+    assert!(c.target.insecure_tls);
+}

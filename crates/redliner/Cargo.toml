@@ -37,3 +37,8 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 # The load generator's own CPU per request: ~23% less than glibc malloc, and
 # ~2.3x less than musl's (5000 rps, local nginx).
 mimalloc = { version = "0.1.52", default-features = false }
+
+[dev-dependencies]
+# The HTTPS mock behind the target.insecure_tls tests; already in the tree
+# through reqwest's rustls.
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }

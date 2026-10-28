@@ -910,3 +910,111 @@ async fn e2e_compare_includes_each_steps_phase() {
     assert!(stdout.contains("phase step-2(40 rps)"), "{stdout}");
 }
 
+/// The JSON every request to the TLS mock gets: a harvestable product list.
+const TLS_BODY: &str = "{\"data\":{\"products\":[{\"id\":7}]}}";
+
+/// An HTTPS server with the self-signed cert in tests/fixtures/tls, answering
+/// every request `200` with [`TLS_BODY`]. Returns its origin and the number
+/// of HTTP requests that got through the handshake.
+async fn spawn_tls_mock() -> (String, Arc<AtomicUsize>) {
+    use tokio_rustls::rustls::pki_types::pem::PemObject;
+    use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use tokio_rustls::rustls::{crypto::ring, ServerConfig};
+
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tls");
+    let certs = CertificateDer::pem_file_iter(dir.join("self-signed.crt"))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let key = PrivateKeyDer::from_pem_file(dir.join("self-signed.key")).unwrap();
+    let config = ServerConfig::builder_with_provider(Arc::new(ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let h = hits.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else { break };
+            let (acceptor, h) = (acceptor.clone(), h.clone());
+            tokio::spawn(async move {
+                // A client that rejects the cert aborts the handshake here.
+                let Ok(mut tls) = acceptor.accept(sock).await else { return };
+                let mut data = Vec::new();
+                let mut buf = [0u8; 4096];
+                while !data.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match tls.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => data.extend_from_slice(&buf[..n]),
+                    }
+                }
+                h.fetch_add(1, Ordering::SeqCst);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{TLS_BODY}",
+                    TLS_BODY.len()
+                );
+                let _ = tls.write_all(resp.as_bytes()).await;
+                let _ = tls.shutdown().await;
+            });
+        }
+    });
+    (format!("https://127.0.0.1:{}", addr.port()), hits)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_insecure_tls_reaches_a_self_signed_server() {
+    let (origin, hits) = spawn_tls_mock().await;
+    let dir = tempdir("tls");
+    let url = format!("{origin}/health");
+    let out = dir.to_str().unwrap();
+    let base = ["--url", url.as_str(), "--rate", "20", "--duration", "500ms", "--slo-success-rate", "0.99", "--out", out];
+
+    // Verification on (the default): the handshake fails, nothing gets through.
+    let (code, stderr) = run_binary_in(&dir, &base).await;
+    assert_eq!(code, Some(1), "stderr: {stderr}");
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    assert!(!stderr.contains("verification is off"), "{stderr}");
+
+    // --insecure: requests get through, and the run says so loudly.
+    let mut insecure = base.to_vec();
+    insecure.push("--insecure");
+    let (code, stderr) = run_binary_in(&dir, &insecure).await;
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert!(hits.load(Ordering::SeqCst) > 0);
+    assert!(stderr.contains("warning: TLS certificate verification is off"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_insecure_tls_covers_the_harvest_probe() {
+    let (origin, hits) = spawn_tls_mock().await;
+    let dir = tempdir("tls-harvest");
+    let p = dir.join("cfg.yaml");
+    let write = |insecure: bool| {
+        std::fs::write(
+            &p,
+            format!(
+                "target:\n  url: {origin}\n  protocol: rest\n  insecure_tls: {insecure}\n\
+                 load:\n  profile: constant\n  rate: 20\n  duration: 500ms\n\
+                 data:\n  harvest:\n    - request:\n        method: GET\n        path: /seed\n      extract:\n        ids: data.products[].id\n\
+                 scenarios:\n  - name: product\n    weight: 1\n    request:\n      method: GET\n      path: \"/products/{{{{ids}}}}\"\n"
+            ),
+        )
+        .unwrap();
+    };
+
+    // The harvest probe has its own client; with verification on it fails first.
+    write(false);
+    assert_eq!(run(args(&p, &["--out", dir.to_str().unwrap()])).await, Exit::Error);
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+    write(true);
+    assert_eq!(run(args(&p, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
+    assert!(hits.load(Ordering::SeqCst) > 1, "harvest probe plus attack traffic");
+}
+
