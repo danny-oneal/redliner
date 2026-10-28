@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+- `run_manifest.json` no longer stores credential header values
+  (`Authorization`, `Cookie`, `*key*`, `*token*`, `*secret*`, …) from
+  `target.headers`, `-H`, or scenario and harvest headers; they are written as
+  `<redacted>`.
+
 ## [0.4.0] - 2026-10-27
 
 ### Added

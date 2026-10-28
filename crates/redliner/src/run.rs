@@ -21,7 +21,7 @@ use crate::phases::{build_phases, Phase};
 use crate::replay::schedule::Schedule;
 use crate::replay::targeter::{SchedulePacer, ScheduleTargeter};
 use crate::replay::{build_replay, ReplaySummary};
-use crate::report::{self, Collector, RunManifest};
+use crate::report::{self, Collector, RedactedConfig, RunManifest};
 use crate::slo::{self, fmt_dur, SloResult};
 
 /// Stands in for the config file name when the run comes from `--url` alone.
@@ -208,7 +208,7 @@ where
         started_at: report::utc_rfc3339(wall_start),
         finished_at: None,
         config_file: config_label,
-        config: cfg.clone(),
+        config: RedactedConfig::from(&cfg),
         seed: cfg.load.seed,
         requests: None,
         slo_results: Vec::new(),

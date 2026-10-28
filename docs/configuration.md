@@ -32,12 +32,19 @@ report:  { ... }  # optional
 | `url`        | string  | *required* | full endpoint for GraphQL; base URL for REST (scenario paths are appended) |
 | `protocol`   | enum    | `graphql`  | `graphql` \| `rest` |
 | `timeout`    | duration| `10s`      | per-request timeout |
-| `headers`    | map     | `{}`       | sent on every request |
+| `headers`    | map     | `{}`       | sent on every request; credential values are redacted in `run_manifest.json` (see below) |
 | `auth`       | object  | `none`     | see below; credentials are read from the environment, never the file |
 | `keep_alive` | bool    | `true`     | reuse pooled connections between requests |
 | `max_idle_conns` | int | `10000`    | max idle pooled connections per host |
 | `http2`      | bool    | `false`    | negotiate HTTP/2 with prior knowledge (cleartext h2c or a known h2 server) |
 | `insecure_tls` | bool  | `false`    | skip TLS certificate verification (`--insecure` / `-k`), for staging or in-cluster services with self-signed certs; covers the harvest probe too, and the run prints a warning when it's on |
+
+`run_manifest.json` records the config with the value of any header whose name
+contains `auth`, `cookie`, `key`, `token`, `secret`, `passw`, `session`,
+`credential` or `signature` (case-insensitive) replaced by `<redacted>`. This
+covers `target.headers`, `-H`, and scenario and harvest headers. Values in
+URLs, bodies and variables are written as-is: keep credentials in headers or
+`target.auth`.
 
 ### `target.auth`
 

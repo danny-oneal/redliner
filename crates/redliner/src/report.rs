@@ -282,7 +282,7 @@ pub struct RunManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
     pub config_file: String,
-    pub config: Config,
+    pub config: RedactedConfig,
     pub seed: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requests: Option<u64>,
@@ -296,6 +296,48 @@ pub struct RunManifest {
     /// The run was interrupted (Ctrl-C) and its results are partial.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub aborted: bool,
+}
+
+/// What a redacted header value is written as.
+pub const REDACTED: &str = "<redacted>";
+
+/// A header whose lowercased name contains one of these carries a credential.
+const SENSITIVE_HEADER_PARTS: [&str; 9] = [
+    "auth", "cookie", "key", "token", "secret", "passw", "session", "credential", "signature",
+];
+
+fn is_sensitive_header(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    SENSITIVE_HEADER_PARTS.iter().any(|p| name.contains(p))
+}
+
+fn redact_headers(headers: &mut BTreeMap<String, String>) {
+    for (name, value) in headers.iter_mut() {
+        if is_sensitive_header(name) {
+            *value = REDACTED.into();
+        }
+    }
+}
+
+/// The config as the manifest records it: the value of every credential
+/// header (`target.headers`, `-H`, scenario and harvest headers) is replaced
+/// by [`REDACTED`]. URLs, bodies and GraphQL variables are written as-is.
+#[derive(Serialize)]
+#[serde(transparent)]
+pub struct RedactedConfig(Config);
+
+impl From<&Config> for RedactedConfig {
+    fn from(cfg: &Config) -> Self {
+        let mut cfg = cfg.clone();
+        redact_headers(&mut cfg.target.headers);
+        for s in &mut cfg.scenarios {
+            redact_headers(&mut s.request.headers);
+        }
+        for h in &mut cfg.data.harvest {
+            redact_headers(&mut h.request.headers);
+        }
+        Self(cfg)
+    }
 }
 
 /// Status codes grouped by class, e.g. `2xx 480, 4xx 12, no response 3`;
@@ -507,6 +549,65 @@ mod tests {
     }
 
     #[test]
+    fn redacts_sensitive_headers_case_insensitively() {
+        let mut cfg = Config::default();
+        for (k, v) in [
+            ("AUTHORIZATION", "Bearer s1"),
+            ("Proxy-Authorization", "s2"),
+            ("Cookie", "s3"),
+            ("X-Api-Key", "s4"),
+            ("x-amz-security-token", "s5"),
+            ("X-Client-Secret", "s6"),
+            ("X-Session-Id", "s7"),
+            ("Accept", "application/json"),
+            ("Content-Type", "text/plain"),
+        ] {
+            cfg.target.headers.insert(k.into(), v.into());
+        }
+        let v = serde_json::to_value(RedactedConfig::from(&cfg)).unwrap();
+        let h = &v["target"]["headers"];
+        for k in [
+            "AUTHORIZATION",
+            "Proxy-Authorization",
+            "Cookie",
+            "X-Api-Key",
+            "x-amz-security-token",
+            "X-Client-Secret",
+            "X-Session-Id",
+        ] {
+            assert_eq!(h[k], REDACTED, "{k}");
+        }
+        assert_eq!(h["Accept"], "application/json");
+        assert_eq!(h["Content-Type"], "text/plain");
+        // The source config still carries the real value: requests use it.
+        assert_eq!(cfg.target.headers["AUTHORIZATION"], "Bearer s1");
+    }
+
+    #[test]
+    fn redacts_scenario_and_harvest_headers() {
+        use crate::config::{HarvestConfig, Scenario};
+        let mut cfg = Config::default();
+        let mut s = Scenario { name: "s".into(), ..Default::default() };
+        s.request.headers.insert("Authorization".into(), "hv-cred-1".into());
+        s.request.headers.insert("Accept".into(), "a".into());
+        cfg.scenarios.push(s);
+        let mut h = HarvestConfig::default();
+        h.request.headers.insert("Authorization".into(), "hv-cred-1".into());
+        h.request.headers.insert("Accept".into(), "a".into());
+        cfg.data.harvest.push(h);
+
+        let v = serde_json::to_value(RedactedConfig::from(&cfg)).unwrap();
+        for headers in [
+            &v["scenarios"][0]["request"]["headers"],
+            &v["data"]["harvest"][0]["request"]["headers"],
+        ] {
+            assert_eq!(headers["Authorization"], REDACTED);
+            assert_eq!(headers["Accept"], "a");
+        }
+        assert!(!v.to_string().contains("hv-cred-1"), "{v}");
+    }
+
+    #[test]
     fn collector_splits_overall_op_phase() {
         let mut c = Collector::new(None).unwrap();
         c.add(&res(200, 1, "http://h/a"), "phase1", Some("A"));
@@ -538,7 +639,7 @@ mod tests {
             started_at: utc_rfc3339(SystemTime::now()),
             finished_at: None,
             config_file: "cfg.yaml".into(),
-            config: Config::default(),
+            config: RedactedConfig::from(&Config::default()),
             seed: 7,
             requests: Some(c.overall().requests),
             slo_results: vec![],
@@ -580,7 +681,7 @@ mod tests {
             started_at: utc_rfc3339(SystemTime::now()),
             finished_at: None,
             config_file: "c".into(),
-            config: Config::default(),
+            config: RedactedConfig::from(&Config::default()),
             seed: 0,
             requests: None,
             slo_results: vec![],

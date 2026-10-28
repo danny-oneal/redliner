@@ -278,7 +278,7 @@ Each run writes `reports/<UTC timestamp>/` and refreshes a `latest` symlink:
 | `metrics.json`        | overall metrics (rate, throughput, success, latencies, status codes) |
 | `per_operation.json`  | requests / success / p50·p95·p99 per scenario |
 | `per_phase.json`      | per-phase metrics (written when more than one phase ran) |
-| `run_manifest.json`   | full config, seed, and SLO verdicts — the audit trail |
+| `run_manifest.json`   | full config (credential headers redacted), seed, and SLO verdicts — the audit trail |
 | `junit.xml`           | SLO results as test cases (when `report.junit: true`) |
 | `results.jsonl`       | raw per-request stream, one JSON object per line (when `report.keep_raw: true`) |
 

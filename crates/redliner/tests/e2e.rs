@@ -648,6 +648,32 @@ async fn e2e_zero_config_url_benchmarks_one_endpoint() {
 }
 
 #[tokio::test]
+async fn e2e_manifest_redacts_header_credentials() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("redact");
+    let url = format!("{}/items", origin(&mock));
+    let out = dir.to_str().unwrap();
+    let args = Args::parse_from([
+        "redliner", "--url", &url, "--rate", "20", "--duration", "1s", "--live-stats", "0s",
+        "--out", out, "-H", "Authorization: Bearer SUPERSECRET", "-H", "X-Api-Key: k123",
+        "-H", "Accept: application/json",
+    ]);
+    assert_eq!(run(args).await, Exit::Ok);
+
+    // The target still gets the real credential...
+    let heads = mock.heads.lock().unwrap().clone();
+    assert!(!heads.is_empty() && heads[0].contains("SUPERSECRET"), "{heads:?}");
+    // ...but the audit trail on disk does not.
+    let raw = std::fs::read_to_string(newest_report(&dir).join("run_manifest.json")).unwrap();
+    assert!(!raw.contains("SUPERSECRET") && !raw.contains("k123"), "{raw}");
+    let manifest = read_manifest(&dir);
+    let headers = &manifest["config"]["target"]["headers"];
+    assert_eq!(headers["Authorization"], "<redacted>");
+    assert_eq!(headers["X-Api-Key"], "<redacted>");
+    assert_eq!(headers["Accept"], "application/json");
+}
+
+#[tokio::test]
 async fn e2e_zero_config_sends_method_and_body() {
     let mock = spawn_mock().await;
     let dir = tempdir("zero-post");
