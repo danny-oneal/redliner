@@ -40,7 +40,8 @@ binary (`redliner`).
   process exit code.
 - **Regression gate:** `redliner compare <baseline> <candidate> --max-regression 10%`
   shows the change between two runs and fails when the candidate is slower
-  or has lower throughput than the baseline, overall or per operation.
+  or has lower throughput than the baseline, overall, per `steps` phase or
+  per operation.
 - **Reports:** per-run `reports/<timestamp>/` with summaries, a latency
   histogram, `metrics.json`, per-operation / per-phase breakdowns, a JUnit file
   for CI, a raw `results.jsonl` stream, and a full run manifest.
@@ -287,7 +288,8 @@ is impossible to miss in a scrollback or CI log.
 
 `redliner compare <baseline> <candidate>` reads two report directories (or
 their `metrics.json`) and prints the change in p50/p95/p99, throughput and
-success rate, overall and for each operation in both runs:
+success rate. It covers the whole run, each load phase of a `steps` run, and
+each operation that appears in both runs:
 
 ```console
 $ redliner compare reports/baseline reports/latest --max-regression 10%
@@ -308,7 +310,13 @@ command exits `1`. Without the flag it only reports, and exits `0`.
 
 - **Success rate** is shown in percentage points but not gated, because
   `slos.success_rate` already sets its floor on every run.
-- **Operations** present in only one run are listed but not compared.
+- **Phases** (from `per_phase.json`) are matched by name, such as
+  `step-3(200 rps)`. This shows a regression that only appears near the
+  throughput knee, which the overall numbers average away. A phase's name
+  includes its rate, so phases only match when both runs used the same step
+  rates.
+- **Operations** and phases present in only one run are listed but not
+  compared.
 - **Rates:** if the two runs fired at rates more than 5% apart, compare
   warns, because latency and throughput then aren't like for like.
 - **Exit codes:** `2` when a report can't be read.

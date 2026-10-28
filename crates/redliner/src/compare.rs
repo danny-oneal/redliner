@@ -1,8 +1,9 @@
 //! `redliner compare`: the change between two runs' reports.
 //!
-//! Reads each run's `metrics.json` (and `per_operation.json`, when present)
-//! and reports the change in p50/p95/p99, throughput and success rate,
-//! overall and per operation. With a threshold, a latency rise or throughput
+//! Reads each run's `metrics.json` (and `per_phase.json` and
+//! `per_operation.json`, when present) and reports the change in
+//! p50/p95/p99, throughput and success rate, overall, per phase and per
+//! operation. With a threshold, a latency rise or throughput
 //! drop beyond it is a regression, and the command exits 1, so CI can fail a
 //! build that got slower than its baseline. The success rate is shown in
 //! percentage points but not gated: `slos.success_rate` sets its floor.
@@ -56,6 +57,8 @@ pub struct RunReport {
     /// The rate requests were fired at.
     pub rate: f64,
     pub overall: Stats,
+    /// Per load phase; only multi-phase runs (`steps`) write these.
+    pub phases: BTreeMap<String, Stats>,
     pub ops: BTreeMap<String, Stats>,
 }
 
@@ -71,7 +74,7 @@ pub enum Change {
 
 #[derive(Debug, Clone)]
 pub struct Row {
-    /// `overall` or an operation name.
+    /// `overall`, `phase <name>` or an operation name.
     pub scope: String,
     pub metric: &'static str,
     pub baseline: String,
@@ -125,8 +128,17 @@ pub fn load(path: &Path) -> Result<RunReport, CompareError> {
         (path, path.join("metrics.json"))
     };
     let m: MetricsFile = read_json(&metrics_path)?;
-    let ops_path = dir.join("per_operation.json");
-    let ops: Vec<OpFile> = if ops_path.exists() { read_json(&ops_path)? } else { Vec::new() };
+    let rows = |name: &str| -> Result<BTreeMap<String, Stats>, CompareError> {
+        let path = dir.join(name);
+        let rows: Vec<OpFile> = if path.exists() { read_json(&path)? } else { Vec::new() };
+        Ok(rows
+            .into_iter()
+            .map(|o| {
+                let stats = o.stats();
+                (o.name, stats)
+            })
+            .collect())
+    };
     Ok(RunReport {
         rate: m.rate,
         overall: Stats {
@@ -136,19 +148,8 @@ pub fn load(path: &Path) -> Result<RunReport, CompareError> {
             success: m.success,
             throughput: Some(m.throughput),
         },
-        ops: ops
-            .into_iter()
-            .map(|o| {
-                let stats = Stats {
-                    p50: o.p50.as_std(),
-                    p95: o.p95.as_std(),
-                    p99: o.p99.as_std(),
-                    success: o.success,
-                    throughput: None,
-                };
-                (o.name, stats)
-            })
-            .collect(),
+        phases: rows("per_phase.json")?,
+        ops: rows("per_operation.json")?,
     })
 }
 
@@ -163,14 +164,29 @@ pub fn compare(base: &RunReport, cand: &RunReport, max_regression: Option<f64>) 
         ));
     }
     push_rows(&mut c.rows, "overall", &base.overall, &cand.overall, max_regression);
-    for (name, b) in &base.ops {
-        match cand.ops.get(name) {
-            Some(k) => push_rows(&mut c.rows, name, b, k, max_regression),
-            None => c.only_in_baseline.push(name.clone()),
+    compare_named(&mut c, "phase ", &base.phases, &cand.phases, max_regression);
+    compare_named(&mut c, "", &base.ops, &cand.ops, max_regression);
+    c
+}
+
+/// Rows for the entries both runs have, matched by name; the rest are listed
+/// as only in one run. `prefix` labels the group (`phase `).
+fn compare_named(
+    c: &mut Comparison,
+    prefix: &str,
+    base: &BTreeMap<String, Stats>,
+    cand: &BTreeMap<String, Stats>,
+    max_regression: Option<f64>,
+) {
+    for (name, b) in base {
+        let scope = format!("{prefix}{name}");
+        match cand.get(name) {
+            Some(k) => push_rows(&mut c.rows, &scope, b, k, max_regression),
+            None => c.only_in_baseline.push(scope),
         }
     }
-    c.only_in_candidate = cand.ops.keys().filter(|n| !base.ops.contains_key(*n)).cloned().collect();
-    c
+    c.only_in_candidate
+        .extend(cand.keys().filter(|n| !base.contains_key(*n)).map(|n| format!("{prefix}{n}")));
 }
 
 /// The comparison as a table, then the verdict on its last line.
@@ -252,7 +268,7 @@ struct LatenciesFile {
     p99: ConfigDuration,
 }
 
-/// One `per_operation.json` row.
+/// One `per_operation.json` or `per_phase.json` row.
 #[derive(Deserialize)]
 struct OpFile {
     name: String,
@@ -260,6 +276,18 @@ struct OpFile {
     p50: ConfigDuration,
     p95: ConfigDuration,
     p99: ConfigDuration,
+}
+
+impl OpFile {
+    fn stats(&self) -> Stats {
+        Stats {
+            p50: self.p50.as_std(),
+            p95: self.p95.as_std(),
+            p99: self.p99.as_std(),
+            success: self.success,
+            throughput: None,
+        }
+    }
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, CompareError> {
@@ -353,6 +381,25 @@ mod tests {
     fn report(rate: f64, overall: (&str, &str, &str, f64, f64), ops: &[(&str, &str, &str, &str, f64)]) -> RunReport {
         let dir = tmp("r");
         write_run(&dir, rate, overall, ops);
+        load(&dir).unwrap()
+    }
+
+    /// A `per_phase.json` beside a run's other reports.
+    fn write_phases(dir: &Path, phases: &[(&str, &str, &str, &str, f64)]) {
+        let rows: Vec<_> = phases
+            .iter()
+            .map(|(name, p50, p95, p99, success)| {
+                serde_json::json!({"name": name, "requests": 100, "success": success,
+                    "p50": p50, "p95": p95, "p99": p99, "max": p99})
+            })
+            .collect();
+        fs::write(dir.join("per_phase.json"), serde_json::to_vec(&rows).unwrap()).unwrap();
+    }
+
+    fn report_with_phases(phases: &[(&str, &str, &str, &str, f64)]) -> RunReport {
+        let dir = tmp("phases");
+        write_run(&dir, 100.0, BASE, &[]);
+        write_phases(&dir, phases);
         load(&dir).unwrap()
     }
 
@@ -501,6 +548,52 @@ mod tests {
         assert_eq!(c.only_in_baseline, vec!["Old".to_string()]);
         assert_eq!(c.only_in_candidate, vec!["New".to_string()]);
         assert_eq!(c.regressions(), 1);
+    }
+
+    #[test]
+    fn load_reads_per_phase_when_present() {
+        let r = report_with_phases(&[("step-1(10 rps)", "1ms", "2ms", "3ms", 1.0), ("step-2(50 rps)", "2ms", "4ms", "6ms", 0.99)]);
+        assert_eq!(r.phases.len(), 2);
+        assert_eq!(r.phases["step-2(50 rps)"].p95, Duration::from_millis(4));
+        assert_eq!(r.phases["step-2(50 rps)"].throughput, None);
+        assert!(report(100.0, BASE, &[]).phases.is_empty(), "single-phase runs have no per_phase.json");
+    }
+
+    #[test]
+    fn phases_are_compared_by_name_and_gated() {
+        let base = report_with_phases(&[
+            ("step-1(10 rps)", "1ms", "2ms", "3ms", 1.0),
+            ("step-2(50 rps)", "2ms", "40ms", "90ms", 1.0),
+            ("step-3(90 rps)", "2ms", "40ms", "90ms", 1.0),
+        ]);
+        let cand = report_with_phases(&[
+            ("step-1(10 rps)", "1ms", "2ms", "3ms", 1.0),
+            ("step-2(50 rps)", "2ms", "88ms", "310ms", 1.0),
+            ("step-3(100 rps)", "2ms", "40ms", "90ms", 1.0),
+        ]);
+        let c = compare(&base, &cand, Some(10.0));
+        assert!(!row(&c, "phase step-1(10 rps)", "p95").regressed);
+        let p99 = row(&c, "phase step-2(50 rps)", "p99");
+        assert!((pct(p99) - 244.44444444444446).abs() < 1e-6, "{p99:?}");
+        assert!(p99.regressed);
+        assert!(row(&c, "phase step-2(50 rps)", "p95").regressed);
+        assert!(c.rows.iter().all(|r| !r.scope.starts_with("phase ") || r.metric != "throughput"));
+        assert_eq!(c.only_in_baseline, vec!["phase step-3(90 rps)".to_string()]);
+        assert_eq!(c.only_in_candidate, vec!["phase step-3(100 rps)".to_string()]);
+        assert_eq!(c.regressions(), 2);
+    }
+
+    #[test]
+    fn phases_come_after_overall_and_before_operations() {
+        let dir = tmp("order");
+        write_run(&dir, 100.0, BASE, &[("GetUser", "5ms", "50ms", "80ms", 1.0)]);
+        write_phases(&dir, &[("step-1(10 rps)", "1ms", "2ms", "3ms", 1.0), ("step-2(50 rps)", "1ms", "2ms", "3ms", 1.0)]);
+        let r = load(&dir).unwrap();
+        let out = render(&compare(&r, &r, Some(10.0)), Some(10.0));
+        let at = |needle: &str| out.find(needle).unwrap_or_else(|| panic!("no {needle:?} in {out}"));
+        assert!(at("overall") < at("phase step-1(10 rps)"), "{out}");
+        assert!(at("phase step-1(10 rps)") < at("phase step-2(50 rps)"), "{out}");
+        assert!(at("phase step-2(50 rps)") < at("GetUser"), "{out}");
     }
 
     #[test]
