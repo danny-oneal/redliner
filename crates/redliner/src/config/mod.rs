@@ -501,7 +501,9 @@ impl Config {
                             "load.rate must be > 0 and finite for profile {:?}",
                             l.profile
                         ));
-                    } else if fires_nothing(l.rate * dur.as_secs_f64(), l.profile == "constant") {
+                    } else if l.profile == "constant"
+                        && fires_nothing(l.rate * dur.as_secs_f64())
+                    {
                         errs.push(format!(
                             "load.rate × load.duration fires no requests for profile {:?} \
                              ({} rps for {dur:?}); raise either",
@@ -511,15 +513,9 @@ impl Config {
                 }
                 "ramp" => {
                     let (from, to) = (l.ramp.from, l.ramp.to);
-                    let dur = l.duration.as_std();
                     if !(from.is_finite() && from >= 0.0 && positive_finite(to)) {
                         errs.push("load.ramp.from/to must be set for profile ramp \
                                    (finite, from >= 0, to > 0)".into());
-                    } else if fires_nothing((from + to) / 2.0 * dur.as_secs_f64(), false) {
-                        errs.push(format!(
-                            "load.ramp averages {} rps over {dur:?}, which fires no requests",
-                            (from + to) / 2.0
-                        ));
                     }
                 }
                 "steps" => {
@@ -532,7 +528,7 @@ impl Config {
                             errs.push(format!(
                                 "load.steps[{i}]: rate and duration must be > 0 and finite"
                             ));
-                        } else if fires_nothing(s.rate * dur.as_secs_f64(), true) {
+                        } else if fires_nothing(s.rate * dur.as_secs_f64()) {
                             errs.push(format!(
                                 "load.steps[{i}]: {} rps for {dur:?} fires no requests",
                                 s.rate
@@ -676,15 +672,11 @@ fn positive_finite(x: f64) -> bool {
     x.is_finite() && x > 0.0
 }
 
-/// Whether a load expected to send `expected` requests sends none. Constant
-/// pacing puts the first hit at `1/rate` and never fires one due exactly at
-/// the deadline, so it needs more than one; Poisson and ramp need one.
-fn fires_nothing(expected: f64, constant_pacing: bool) -> bool {
-    if constant_pacing {
-        expected <= 1.0
-    } else {
-        expected < 1.0
-    }
+/// Whether constant pacing expected to send `expected` requests sends none:
+/// it puts the first hit at `1/rate` and never fires one due exactly at the
+/// deadline. (Poisson and ramp pacers fire their first hit at once.)
+fn fires_nothing(expected: f64) -> bool {
+    expected <= 1.0
 }
 
 /// Parse an RFC3339 timestamp (any offset) into UTC. Err is the message only.

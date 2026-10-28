@@ -41,10 +41,12 @@ report:  { ... }  # optional
 
 `run_manifest.json` records the config with the value of any header whose name
 contains `auth`, `cookie`, `key`, `token`, `secret`, `passw`, `session`,
-`credential` or `signature` (case-insensitive) replaced by `<redacted>`. This
-covers `target.headers`, `-H`, and scenario and harvest headers. Values in
-URLs, bodies and variables are written as-is: keep credentials in headers or
-`target.auth`.
+`credential`, `signature`, `jwt`, `dpop` or `bearer` (case-insensitive)
+replaced by `<redacted>`. This covers `target.headers`, `-H`, and scenario and
+harvest headers. Values in URLs, bodies, variables and pool `values` are
+written as-is: a header that takes a credential from a `{{pool}}` is redacted,
+but the pool's inline `values` are not. Keep credentials in literal headers or
+in `target.auth` (read from the environment).
 
 ### `target.auth`
 
@@ -79,11 +81,12 @@ auth:
 | `max_workers` | int   | `100000`  | hard cap on in-flight requests |
 | `seed`     | int      | `0`       | `0` derives a seed from the wall clock and records it; a fixed value reproduces pacing and sampling exactly |
 
-A load that cannot fire a single request is rejected: `constant` and each
-`steps` entry need `rate × duration > 1` (the first hit is due at `1/rate`,
-and a hit due exactly at the end is not sent), `poisson` needs
-`rate × duration ≥ 1`, and `ramp` needs `(from + to) / 2 × duration ≥ 1`.
-Rates must be finite.
+Rates must be finite. `constant` and each `steps` entry must also satisfy
+`rate × duration > 1`: they fire their first hit at `1/rate`, and a hit due
+exactly at the end is not sent, so a smaller load fires nothing and is
+rejected (`poisson` and `ramp` fire their first hit at once). A load just over
+the line can still miss its only hit by the timer's millisecond resolution;
+the run then fails the `successful_requests` check.
 
 ```yaml
 # ramp: climb linearly from 50 to 500 rps over `duration`
@@ -411,7 +414,8 @@ enforced. Each one has a CLI override (`--slo-success-rate`, `--slo-p50`,
 `--slo-p95`, `--slo-p99`, `--slo-p999`, `--slo-throughput-min`).
 
 Independent of these thresholds, a run in which no request succeeded (none
-fired, or every one failed at the transport layer or a check) fails the
+fired, or every one failed at the transport layer or a check; a status listed
+in `checks.status` counts as success) fails the
 built-in `successful_requests` check, listed with the SLOs and in `junit.xml`,
 and exits `1`. An interrupted run exits `130` instead.
 

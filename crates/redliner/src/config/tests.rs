@@ -255,8 +255,6 @@ fn load_that_fires_nothing_is_rejected() {
     for load in [
         "profile: constant, rate: 0.5, duration: 1s",
         "profile: constant, rate: 1, duration: 1s",
-        "profile: poisson, rate: 0.5, duration: 1s",
-        "profile: ramp, ramp: {from: 0, to: 0.5}, duration: 1s",
     ] {
         let t = err_text(with_load(load));
         assert!(t.contains("fires no requests"), "{load}: {t}");
@@ -266,6 +264,17 @@ fn load_that_fires_nothing_is_rejected() {
     ));
     assert!(t.contains("load.steps[1]") && t.contains("fires no requests"), "{t}");
     assert!(!t.contains("load.steps[0]"), "{t}");
+}
+
+#[test]
+fn poisson_and_ramp_fire_their_first_hit_at_once_so_are_accepted() {
+    // Both pacers are behind schedule on the first call and fire immediately.
+    for load in [
+        "profile: poisson, rate: 0.5, duration: 1s",
+        "profile: ramp, ramp: {from: 0, to: 0.5}, duration: 1s",
+    ] {
+        assert!(with_load(load).is_ok(), "{load}");
+    }
 }
 
 #[test]

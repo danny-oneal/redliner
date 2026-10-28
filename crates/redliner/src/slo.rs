@@ -56,9 +56,10 @@ pub fn evaluate(slos: &SloConfig, m: &Metrics) -> Vec<SloResult> {
 }
 
 /// The built-in check that some request succeeded, enforced with or without
-/// SLOs: `Some` (a failed result) when none fired or none succeeded.
-pub fn no_success(m: &Metrics) -> Option<SloResult> {
-    if m.successes() > 0 {
+/// SLOs: `Some` (a failed result) when none fired or none of them was
+/// `accepted` by the checker.
+pub fn no_success(m: &Metrics, accepted: u64) -> Option<SloResult> {
+    if accepted > 0 {
         return None;
     }
     let observed = match m.requests {
@@ -71,6 +72,18 @@ pub fn no_success(m: &Metrics) -> Option<SloResult> {
         observed,
         passed: false,
     })
+}
+
+/// The stderr line for a run that [`no_success`] failed.
+pub fn no_success_warning(m: &Metrics) -> String {
+    if m.requests == 0 {
+        return "warning: no requests fired; check load.rate and load.duration".into();
+    }
+    format!(
+        "warning: no request succeeded (0 of {}; status: {}); the errors in the summary say why",
+        m.requests,
+        crate::report::status_classes(&m.status_codes)
+    )
 }
 
 pub fn passed(results: &[SloResult]) -> bool {
@@ -104,7 +117,7 @@ mod tests {
     fn no_success_flags_empty_and_all_failed_runs() {
         let mut empty = Metrics::new();
         empty.close();
-        let r = no_success(&empty).expect("empty run must fail");
+        let r = no_success(&empty, 0).expect("empty run must fail");
         assert_eq!(
             (r.name.as_str(), r.target.as_str(), r.observed.as_str(), r.passed),
             ("successful_requests", ">= 1", "no requests fired", false)
@@ -115,7 +128,7 @@ mod tests {
             dead.add(&hit(0, Some("connection refused")));
         }
         dead.close();
-        let r = no_success(&dead).expect("all-failed run must fail");
+        let r = no_success(&dead, 0).expect("all-failed run must fail");
         assert_eq!(r.observed, "0 of 20");
         assert!(!r.passed);
 
@@ -125,7 +138,24 @@ mod tests {
         }
         one.add(&hit(200, None));
         one.close();
-        assert!(no_success(&one).is_none());
+        assert!(no_success(&one, 1).is_none());
+    }
+
+    #[test]
+    fn no_success_warning_names_the_cause() {
+        let mut empty = Metrics::new();
+        empty.close();
+        let w = no_success_warning(&empty);
+        assert!(w.contains("no requests fired") && w.contains("load.rate"), "{w}");
+
+        let mut failed = Metrics::new();
+        for _ in 0..3 {
+            failed.add(&hit(0, Some("check: graphql errors (http 200): boom")));
+        }
+        failed.close();
+        let w = no_success_warning(&failed);
+        assert!(w.contains("0 of 3") && w.contains("errors"), "{w}");
+        assert!(!w.contains("target up"), "{w}");
     }
 
     #[test]

@@ -727,6 +727,53 @@ async fn e2e_all_checks_failed_without_slos_exits_one() {
     assert!(has_slo(&read_manifest(&dir), "successful_requests"));
 }
 
+/// Answers every request with `404 Not Found`; for bodiless GETs only.
+async fn spawn_404_mock() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let hits = Arc::new(AtomicUsize::new(0));
+    let h = hits.clone();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let h = h.clone();
+            tokio::spawn(async move {
+                let mut data = Vec::new();
+                let mut buf = [0u8; 4096];
+                while !data.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => data.extend_from_slice(&buf[..n]),
+                    }
+                }
+                h.fetch_add(1, Ordering::SeqCst);
+                let _ = sock
+                    .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+            });
+        }
+    });
+    (origin, hits)
+}
+
+#[tokio::test]
+async fn e2e_allowed_non_2xx_status_passes_without_slos() {
+    // `checks.status` defines success; a 404 it allows is not a failed run.
+    let (origin, hits) = spawn_404_mock().await;
+    let dir = tempdir("allow404");
+    let cfg = dir.join("cfg.yaml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "target:\n  url: {origin}\n  protocol: rest\nload:\n  profile: constant\n  rate: 20\n  duration: 1s\n\
+             checks:\n  status: [404]\nscenarios:\n  - {{name: gone, weight: 1, request: {{method: GET, path: /gone}}}}\n"
+        ),
+    )
+    .unwrap();
+    let extra = ["--out", dir.to_str().unwrap(), "--live-stats", "0s"];
+    assert_eq!(run(args(&cfg, &extra)).await, Exit::Ok);
+    assert!(hits.load(Ordering::SeqCst) > 10);
+}
+
 #[tokio::test]
 async fn e2e_interrupted_dead_target_exits_130() {
     let dir = tempdir("dead-int");

@@ -302,8 +302,9 @@ pub struct RunManifest {
 pub const REDACTED: &str = "<redacted>";
 
 /// A header whose lowercased name contains one of these carries a credential.
-const SENSITIVE_HEADER_PARTS: [&str; 9] = [
+const SENSITIVE_HEADER_PARTS: [&str; 12] = [
     "auth", "cookie", "key", "token", "secret", "passw", "session", "credential", "signature",
+    "jwt", "dpop", "bearer",
 ];
 
 fn is_sensitive_header(name: &str) -> bool {
@@ -559,6 +560,9 @@ mod tests {
             ("x-amz-security-token", "s5"),
             ("X-Client-Secret", "s6"),
             ("X-Session-Id", "s7"),
+            ("X-JWT-Assertion", "s8"),
+            ("DPoP", "s9"),
+            ("X-Bearer", "s10"),
             ("Accept", "application/json"),
             ("Content-Type", "text/plain"),
         ] {
@@ -574,6 +578,9 @@ mod tests {
             "x-amz-security-token",
             "X-Client-Secret",
             "X-Session-Id",
+            "X-JWT-Assertion",
+            "DPoP",
+            "X-Bearer",
         ] {
             assert_eq!(h[k], REDACTED, "{k}");
         }

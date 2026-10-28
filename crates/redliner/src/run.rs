@@ -290,12 +290,8 @@ where
     // every answer failed a check): fail it even when no SLO is enforced.
     let mut none_succeeded = false;
     if !interrupted {
-        if let Some(r) = slo::no_success(collector.overall()) {
-            eprintln!(
-                "warning: no request succeeded ({}; status: {}); is the target up?",
-                r.observed,
-                report::status_classes(&collector.overall().status_codes)
-            );
+        if let Some(r) = slo::no_success(collector.overall(), checker.accepted()) {
+            eprintln!("{}", slo::no_success_warning(collector.overall()));
             results.push(r);
             none_succeeded = true;
             passed = false;
