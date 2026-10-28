@@ -1050,6 +1050,8 @@ async fn e2e_rest_header_placeholders_send_a_fresh_value_per_request() {
     assert!(keys.iter().all(|k| k.len() == 36 && !k.contains('{')), "keys: {keys:?}");
     let unique: std::collections::BTreeSet<_> = keys.iter().collect();
     assert_eq!(unique.len(), keys.len(), "every request gets its own key");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn e2e_summary_shows_p999_and_status_classes() {
     let mock = spawn_mock().await;
