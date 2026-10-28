@@ -673,6 +673,18 @@ async fn e2e_manifest_redacts_header_credentials() {
     assert_eq!(headers["Accept"], "application/json");
 }
 
+#[tokio::test]
+async fn e2e_fractional_constant_rate_fires() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("fractional");
+    let cfg = write_cfg(&dir, &mock.url, "");
+    // 2.5 rps for 2s: hits due at 0.4, 0.8, 1.2 and 1.6s; the one due at 2.0s
+    // falls on the deadline. Truncating to 2 rps fired 3.
+    let extra = ["--out", dir.to_str().unwrap(), "--rate", "2.5", "--duration", "2s"];
+    assert_eq!(run(args(&cfg, &extra)).await, Exit::Ok);
+    assert_eq!(mock.hits.load(Ordering::SeqCst), 4);
+}
+
 /// `--url` args aimed at a port nothing listens on.
 fn dead_target_args(out: &str, duration: &str) -> Args {
     Args::parse_from([

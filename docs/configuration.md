@@ -70,7 +70,7 @@ auth:
 | key        | type     | default   | notes |
 | ---------- | -------- | --------- | ----- |
 | `profile`  | enum     | `poisson` | `constant` \| `poisson` \| `ramp` \| `steps` |
-| `rate`     | float    | `200`     | requests per second (`constant`, `poisson`) |
+| `rate`     | float    | `200`     | requests per second (`constant`, `poisson`); fractional rates such as `0.5` or `2.7` are honoured |
 | `duration` | duration | `30s`     | measured attack length (`constant`, `poisson`, `ramp`) |
 | `warmup`   | duration | `0`       | unmeasured warmup at 10% of the first phase's rate |
 | `ramp`     | object   | —         | `{ from, to }` rates for `profile: ramp` |

@@ -27,6 +27,17 @@ pub struct ConstantPacer {
     pub per: Duration,
 }
 
+impl ConstantPacer {
+    /// Fires `rate` hits per second, fractions included, at a resolution of
+    /// 10⁻⁶ hits/s (`rate` micro-hits every 10⁶ s, so an integral rate keeps
+    /// exactly the `{ freq: rate, per: 1s }` schedule). A NaN, zero or negative
+    /// rate gives `freq: 0`, which stops at once.
+    pub fn from_rate(rate: f64) -> Self {
+        const SCALE: u64 = 1_000_000;
+        Self { freq: (rate * SCALE as f64).round() as u64, per: Duration::from_secs(SCALE) }
+    }
+}
+
 impl Pacer for ConstantPacer {
     fn pace(&self, elapsed: Duration, hits: u64) -> (Duration, bool) {
         if self.freq == 0 || self.per.is_zero() {
@@ -164,6 +175,45 @@ mod tests {
         }
         assert!((99..=101).contains(&hits), "hits = {hits}");
         assert!((p.rate(Duration::ZERO) - 100.0).abs() < 1e-9);
+    }
+
+    /// Hits a pacer fires in `secs`, driving it like the attack loop does.
+    fn hits_in(p: &impl Pacer, secs: u64) -> u64 {
+        let mut elapsed = Duration::ZERO;
+        let mut hits = 0u64;
+        while elapsed < Duration::from_secs(secs) {
+            let (wait, stop) = p.pace(elapsed, hits);
+            assert!(!stop);
+            elapsed += wait;
+            hits += 1;
+        }
+        hits
+    }
+
+    #[test]
+    fn from_rate_fractional_paces_exactly() {
+        assert_eq!(hits_in(&ConstantPacer::from_rate(2.5), 10), 25);
+        assert_eq!(hits_in(&ConstantPacer::from_rate(0.5), 10), 5);
+        assert!((ConstantPacer::from_rate(2.7).rate(Duration::ZERO) - 2.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn from_rate_integral_matches_legacy_schedule() {
+        for rate in [100u64, 3] {
+            let new = ConstantPacer::from_rate(rate as f64);
+            let old = ConstantPacer { freq: rate, per: Duration::from_secs(1) };
+            let mut elapsed = Duration::ZERO;
+            for hits in 0..1000u64 {
+                let got = new.pace(elapsed, hits);
+                assert_eq!(got, old.pace(elapsed, hits), "rate {rate} hit {hits}");
+                elapsed += got.0;
+            }
+        }
+    }
+
+    #[test]
+    fn from_rate_nan_stops() {
+        assert!(ConstantPacer::from_rate(f64::NAN).pace(Duration::ZERO, 0).1);
     }
 
     #[test]
