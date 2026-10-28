@@ -856,6 +856,29 @@ async fn e2e_compare_gates_a_regression_between_real_runs() {
     assert!(stdout.contains("REGRESSED"), "{stdout}");
     assert!(stdout.contains("only in baseline: ping"), "{stdout}");
 
+    // --junit records each gated metric as a test case, failures included.
+    let junit = dir.join("compare.xml");
+    let (code, _, stderr) = run_compare(&[
+        b,
+        cand.to_str().unwrap(),
+        "--max-regression",
+        "10%",
+        "--junit",
+        junit.to_str().unwrap(),
+    ])
+    .await;
+    assert_eq!(code, Some(1), "stderr: {stderr}");
+    let xml = std::fs::read_to_string(&junit).unwrap();
+    assert!(xml.contains("<testsuite name=\"redliner.compare\" tests=\"4\" failures=\"1\""), "{xml}");
+    assert!(xml.contains("<testcase name=\"overall p99\""), "{xml}");
+    assert!(xml.contains("over the 10% limit"), "{xml}");
+
+    // An unwritable --junit path is an error, not a silent pass.
+    let (code, _, stderr) =
+        run_compare(&[b, b, "--junit", dir.join("no/such/dir/x.xml").to_str().unwrap()]).await;
+    assert_eq!(code, Some(2), "stderr: {stderr}");
+    assert!(stderr.contains("x.xml"), "{stderr}");
+
     // Without a threshold it reports and exits 0.
     let (code, _, _) = run_compare(&[b, cand.to_str().unwrap()]).await;
     assert_eq!(code, Some(0));

@@ -66,6 +66,16 @@ adds a relative gate: "no worse than the baseline by more than N%". Goku's
   (`args_conflicts_with_subcommands`), so `redliner --url …` and every run
   flag are unchanged. Run flags given together with `compare` are rejected.
 - **Exit codes** reuse the run's: `1` (gate failed) and `2` (error).
+- **JUnit (`--junit <file>`, added at the maintainer's request):**
+  - The suite is `redliner.compare`, with one test case per gated row, named
+    `<scope> <metric>`.
+  - A regression is a `<failure>` whose message gives the baseline, the
+    candidate, the change and the limit.
+  - Success-rate rows aren't gated, so they aren't test cases. Without
+    `--max-regression` every case passes.
+  - It's written by the same writer as the run's SLO `junit.xml`
+    (`report::write_junit_suite`). A write failure exits `2` rather than
+    letting CI see no report.
 
 ## Known limitations
 
