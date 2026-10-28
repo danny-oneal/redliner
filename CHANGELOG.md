@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-27
+
 ### Security
 - `run_manifest.json` no longer stores credential header values
   (`Authorization`, `Cookie`, `*key*`, `*token*`, `*secret*`, …) from
@@ -185,7 +187,8 @@ Initial release — a from-scratch Rust port of an internal Go/Vegeta harness.
   violates one or more SLOs.
 - **Reproducibility** — a fixed `load.seed` reproduces pacing and sampling.
 
-[Unreleased]: https://github.com/danny-oneal/redliner/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/danny-oneal/redliner/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/danny-oneal/redliner/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/danny-oneal/redliner/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/danny-oneal/redliner/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/danny-oneal/redliner/compare/v0.1.0...v0.2.0
