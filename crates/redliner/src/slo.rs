@@ -43,6 +43,7 @@ pub fn evaluate(slos: &SloConfig, m: &Metrics) -> Vec<SloResult> {
     lat("latency_p50", slos.p50.as_std(), m.latencies.p50);
     lat("latency_p95", slos.p95.as_std(), m.latencies.p95);
     lat("latency_p99", slos.p99.as_std(), m.latencies.p99);
+    lat("latency_p999", slos.p999.as_std(), m.latencies.p999);
     if slos.throughput_min > 0.0 {
         out.push(SloResult {
             name: "throughput".into(),
@@ -95,5 +96,12 @@ mod tests {
 
         let ok = SloConfig { p95: ConfigDuration(Duration::from_secs(1)), ..Default::default() };
         assert!(passed(&evaluate(&ok, &m)));
+
+        let p999 = SloConfig { p999: ConfigDuration(Duration::from_millis(100)), ..Default::default() };
+        let res = evaluate(&p999, &m);
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].name, "latency_p999");
+        assert!(!res[0].passed);
+        assert!(p999.enforced());
     }
 }

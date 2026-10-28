@@ -36,7 +36,7 @@ binary (`redliner`).
   correlation IDs) with no setup.
 - **App-layer checks:** reclassify a `200`-with-GraphQL-`errors` or an
   out-of-set status as a failure, so the success rate tells the truth.
-- **SLO gate:** success rate, p50/p95/p99, and throughput thresholds decide the
+- **SLO gate:** success rate, p50/p95/p99/p99.9, and throughput thresholds decide the
   process exit code.
 - **Regression gate:** `redliner compare <baseline> <candidate> --max-regression 10%`
   shows the change between two runs and fails when the candidate is slower
@@ -173,7 +173,7 @@ one request to benchmark. `redliner compare` compares two finished runs (see
 | `--out`       | `report.dir`   |                                         |
 | `--live-stats`| `report.live_stats` | progress line interval, e.g. `5s`; `0s` turns it off |
 | `--slo-success-rate` | `slos.success_rate` | fraction, e.g. `0.995` |
-| `--slo-p50` / `--slo-p95` / `--slo-p99` | `slos.p50` / `p95` / `p99` | max latency, e.g. `200ms`; `0s` turns a file's SLO off |
+| `--slo-p50` / `--slo-p95` / `--slo-p99` / `--slo-p999` | `slos.p50` / `p95` / `p99` / `p999` | max latency, e.g. `200ms`; `0s` turns a file's SLO off |
 | `--slo-throughput-min` | `slos.throughput_min` | successful requests per second |
 | `-k`, `--insecure` | `target.insecure_tls` | skip TLS certificate verification (self-signed test environments only; the run warns) |
 | `--validate`  | —              | validate the config and exit `0`        |

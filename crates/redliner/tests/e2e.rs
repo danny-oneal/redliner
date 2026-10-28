@@ -1050,5 +1050,19 @@ async fn e2e_rest_header_placeholders_send_a_fresh_value_per_request() {
     assert!(keys.iter().all(|k| k.len() == 36 && !k.contains('{')), "keys: {keys:?}");
     let unique: std::collections::BTreeSet<_> = keys.iter().collect();
     assert_eq!(unique.len(), keys.len(), "every request gets its own key");
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_summary_shows_p999_and_status_classes() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("summary");
+    let cfg = write_cfg(&dir, &mock.url, "slos:\n  p999: 10s\n");
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_redliner"));
+    cmd.arg("--config").arg(&cfg).args(["--out", dir.to_str().unwrap()]);
+    let out = tokio::task::spawn_blocking(move || cmd.output().unwrap()).await.unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("latency p99.9 : "), "{stdout}");
+    let status = stdout.lines().find(|l| l.starts_with("status        : ")).expect("status line");
+    assert!(status.starts_with("status        : 2xx "), "{status}");
+    assert!(stdout.contains("latency_p999"), "the p99.9 SLO is evaluated: {stdout}");
 }
 

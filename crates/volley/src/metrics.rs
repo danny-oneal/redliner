@@ -16,6 +16,8 @@ pub struct Latencies {
     pub p90: Duration,
     pub p95: Duration,
     pub p99: Duration,
+    /// 99.9th percentile: the slowest 1 in 1000.
+    pub p999: Duration,
     pub max: Duration,
     pub min: Duration,
 }
@@ -127,7 +129,9 @@ impl Metrics {
         let n = self.requests as f64;
         self.success = self.successes as f64 / n;
 
-        let q = |p: f64| Duration::from_nanos(self.hist.value_at_quantile(p));
+        // The histogram answers with a bucket's upper edge, which can sit just
+        // above the slowest real request; no percentile exceeds the max.
+        let q = |p: f64| Duration::from_nanos(self.hist.value_at_quantile(p)).min(self.lat_max);
         self.latencies = Latencies {
             total: self.latency_total,
             mean: self.latency_total / u32::try_from(self.requests).unwrap_or(u32::MAX),
@@ -135,6 +139,7 @@ impl Metrics {
             p90: q(0.90),
             p95: q(0.95),
             p99: q(0.99),
+            p999: q(0.999),
             max: self.lat_max,
             min: self.lat_min.unwrap_or_default(),
         };
@@ -204,6 +209,62 @@ mod tests {
         assert_eq!(m.errors.len(), 1);
         assert_eq!(m.bytes_in, 500);
         assert_eq!(m.bytes_out, 200);
+    }
+
+    #[test]
+    fn p999_sits_between_p99_and_max() {
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let mut m = Metrics::default();
+        // 1..=1000ms: p99 is ~990ms and p99.9 ~999ms.
+        for i in 1..=1000u64 {
+            m.add(&AttackResult {
+                attack: "t".into(),
+                seq: i,
+                code: 200,
+                timestamp: base + Duration::from_millis(i),
+                latency: Duration::from_millis(i),
+                bytes_in: 0,
+                bytes_out: 0,
+                error: None,
+                method: "GET".into(),
+                url: "http://x".into(),
+                body: vec![],
+            });
+        }
+        m.close();
+        let ms = |d: Duration| d.as_secs_f64() * 1e3;
+        assert!((ms(m.latencies.p99) - 990.0).abs() < 1.0, "p99 {:?}", m.latencies.p99);
+        assert!((ms(m.latencies.p999) - 999.0).abs() < 1.0, "p99.9 {:?}", m.latencies.p999);
+        assert!(m.latencies.p999 <= m.latencies.max);
+    }
+
+    #[test]
+    fn percentiles_never_exceed_max() {
+        // The histogram reports a bucket's upper edge (3 significant digits),
+        // so a raw quantile can land just above the slowest real request.
+        let mut m = Metrics::default();
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        for (i, us) in [100u64, 783].into_iter().enumerate() {
+            m.add(&AttackResult {
+                attack: "t".into(),
+                seq: i as u64,
+                code: 200,
+                timestamp: base,
+                latency: Duration::from_micros(us),
+                bytes_in: 0,
+                bytes_out: 0,
+                error: None,
+                method: "GET".into(),
+                url: "http://x".into(),
+                body: vec![],
+            });
+        }
+        m.close();
+        let l = m.latencies;
+        assert_eq!(l.max, Duration::from_micros(783));
+        for (name, p) in [("p90", l.p90), ("p95", l.p95), ("p99", l.p99), ("p99.9", l.p999)] {
+            assert!(p <= l.max, "{name} {p:?} > max {:?}", l.max);
+        }
     }
 
     #[test]

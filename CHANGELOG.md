@@ -13,6 +13,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every request. They render after the path and body, so adding one to a
   seeded config doesn't change the paths and bodies it sends. `target.headers`
   and `-H` are still sent as written.
+- **p99.9 latency** in the run summary, `text.txt` and `metrics.json`
+  (`latencies.p999`), with an SLO for it: `slos.p999` / `--slo-p999`.
+- **Status classes** in the run summary and `text.txt`: one line such as
+  `status : 2xx 480, 4xx 12, 5xx 3, no response 5`, so 4xx/5xx responses and
+  requests that never got a response stand out without reading the full
+  status-code list.
 - **`target.insecure_tls` / `--insecure` (`-k`)** skips TLS certificate
   verification, so runs can reach staging or in-cluster services with
   self-signed certs. It covers the harvest probe as well as attack traffic,
@@ -20,9 +26,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the target. Off by default.
 
 ### Changed
+- `volley::Latencies` has a new `p999` field. This breaks external code that
+  builds the struct without `..Default::default()`.
 - `volley::AttackerConfig` has a new `danger_accept_invalid_certs` field
   (default `false`). This breaks external code that builds the struct
   without `..Default::default()`.
+
+### Fixed
+- A latency percentile can no longer read higher than `max`. The histogram
+  reports a bucket's upper edge, so p99 could show e.g. `784µs` against a
+  `max` of `783µs`; percentiles are now capped at the slowest request.
 
 ## [0.3.0] - 2026-10-27
 
