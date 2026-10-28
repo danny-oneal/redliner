@@ -1,6 +1,7 @@
 //! Redliner: SLO-driven HTTP load testing (library half; `main.rs` is a shim).
 
 pub mod checks;
+pub mod compare;
 pub mod cli;
 pub mod config;
 pub mod data;

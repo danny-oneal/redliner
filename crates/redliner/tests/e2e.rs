@@ -815,3 +815,53 @@ async fn e2e_uuid_pool_repeats_with_the_same_seed() {
     // last hit or two can fall either side of the 1s cut-off).
     assert!(common + 2 >= ka.len().min(kb.len()) && common > 10, "{common} of {}", ka.len());
 }
+
+/// Runs the binary with `args`; returns the exit code and stdout.
+async fn run_compare(args: &[&str]) -> (Option<i32>, String, String) {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_redliner"));
+    cmd.arg("compare").args(args);
+    let out = tokio::task::spawn_blocking(move || cmd.output().unwrap()).await.unwrap();
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_compare_gates_a_regression_between_real_runs() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("compare");
+    let cfg = write_cfg(&dir, &mock.url, "");
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
+    let base = newest_report(&dir);
+
+    // A run against itself: no change, so even a 0% threshold passes.
+    let b = base.to_str().unwrap();
+    let (code, stdout, stderr) = run_compare(&[b, b, "--max-regression", "0%"]).await;
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("p95") && stdout.contains("ping"), "{stdout}");
+    assert!(stdout.trim_end().ends_with("no regressions over 0%"), "{stdout}");
+
+    // The same run with p99 at 10s.
+    let cand = dir.join("candidate");
+    std::fs::create_dir_all(&cand).unwrap();
+    let mut m: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(base.join("metrics.json")).unwrap()).unwrap();
+    m["latencies"]["p99"] = "10s".into();
+    std::fs::write(cand.join("metrics.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    let (code, stdout, stderr) =
+        run_compare(&[b, cand.to_str().unwrap(), "--max-regression", "10%"]).await;
+    assert_eq!(code, Some(1), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("REGRESSED"), "{stdout}");
+    assert!(stdout.contains("only in baseline: ping"), "{stdout}");
+
+    // Without a threshold it reports and exits 0.
+    let (code, _, _) = run_compare(&[b, cand.to_str().unwrap()]).await;
+    assert_eq!(code, Some(0));
+
+    // A missing run is an error.
+    let (code, _, stderr) = run_compare(&[b, dir.join("nope").to_str().unwrap()]).await;
+    assert_eq!(code, Some(2));
+    assert!(stderr.contains("nope"), "{stderr}");
+}
