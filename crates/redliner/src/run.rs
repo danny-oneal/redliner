@@ -63,6 +63,7 @@ fn new_attacker(cfg: &Config) -> Result<Attacker, volley::Error> {
         max_idle_conns: cfg.target.max_idle_conns.max(0) as usize,
         keep_alive: cfg.target.keep_alive.unwrap_or(true),
         http2: cfg.target.http2,
+        danger_accept_invalid_certs: cfg.target.insecure_tls,
     })
 }
 
@@ -130,6 +131,13 @@ where
             (cfg, URL_CONFIG.to_string())
         }
     };
+    if cfg.target.insecure_tls {
+        eprintln!(
+            "warning: TLS certificate verification is off (target.insecure_tls / --insecure): \
+             any server on the path can answer for {}. Use it only against test environments.",
+            cfg.target.url
+        );
+    }
     // Replay knobs without a replay target are one clear error, not a cascade.
     args.check_replay_knobs(cfg.replay.is_some())
         .map_err(anyhow::Error::msg)?;

@@ -53,6 +53,9 @@ pub struct TargetConfig {
     pub read_buffer_bytes: i64,
     pub write_buffer_bytes: i64,
     pub http2: bool,
+    /// Skip TLS certificate verification, for staging or in-cluster services
+    /// with self-signed certs. The run warns loudly when it's on.
+    pub insecure_tls: bool,
 }
 
 /// Credentials come from the environment, never from the file.

@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`target.insecure_tls` / `--insecure` (`-k`)** skips TLS certificate
+  verification, so runs can reach staging or in-cluster services with
+  self-signed certs. It covers the harvest probe as well as attack traffic,
+  and every run (and `--validate`) that has it on prints a warning naming
+  the target. Off by default.
+
+### Changed
+- `volley::AttackerConfig` has a new `danger_accept_invalid_certs` field
+  (default `false`). This breaks external code that builds the struct
+  without `..Default::default()`.
+
 ## [0.3.0] - 2026-10-27
 
 ### Added

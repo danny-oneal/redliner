@@ -23,6 +23,7 @@ impl BootstrapClient {
         let headers = base_headers(cfg)?;
         let client = reqwest::Client::builder()
             .timeout(cfg.timeout.as_std())
+            .danger_accept_invalid_certs(cfg.insecure_tls)
             .build()
             .map_err(|e| DataError::Http(e.to_string()))?;
         Ok(Self {

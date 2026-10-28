@@ -26,6 +26,9 @@ pub struct AttackerConfig {
     pub keep_alive: bool,
     /// Negotiate HTTP/2 with prior knowledge (h2c / cleartext or ALPN).
     pub http2: bool,
+    /// Skip TLS certificate and hostname verification (self-signed test
+    /// environments). Anyone on the path can then answer for the target.
+    pub danger_accept_invalid_certs: bool,
 }
 
 impl Default for AttackerConfig {
@@ -37,6 +40,7 @@ impl Default for AttackerConfig {
             max_idle_conns: 100,
             keep_alive: true,
             http2: false,
+            danger_accept_invalid_certs: false,
         }
     }
 }
@@ -60,6 +64,9 @@ impl Attacker {
         }
         if cfg.http2 {
             builder = builder.http2_prior_knowledge();
+        }
+        if cfg.danger_accept_invalid_certs {
+            builder = builder.danger_accept_invalid_certs(true);
         }
 
         let client = builder.build().map_err(|e| Error::Build(e.to_string()))?;
@@ -342,6 +349,7 @@ mod tests {
             max_idle_conns: 100,
             keep_alive: true,
             http2: false,
+            danger_accept_invalid_certs: false,
         }
     }
 
