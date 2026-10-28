@@ -87,7 +87,7 @@ fi
 echo "ok - refuses a missing or empty section"
 
 # 5. Bad versions are refused and leave the tree untouched.
-for bad in 1.2 v1.2.3 0.0.1 "$current"; do
+for bad in 1.2 v1.2.3 0.0.1 "$current" minorr Patch ""; do
     fixture
     if release "$bad" > "$work/out.txt" 2>&1; then
         fail "accepted version $bad"
@@ -96,7 +96,24 @@ for bad in 1.2 v1.2.3 0.0.1 "$current"; do
 done
 echo "ok - refuses a malformed, older or unchanged version"
 
-# 6. Nothing unreleased, nothing to release.
+# 6. major / minor / patch bump that part of the current version, through
+#    the make targets.
+major=${current%%.*}
+rest=${current#*.}
+minor=${rest%%.*}
+patch=${rest#*.}
+for bump in "major $((major + 1)).0.0" "minor $major.$((minor + 1)).0" "patch $major.$minor.$((patch + 1))"; do
+    part=${bump% *}
+    want=${bump#* }
+    fixture
+    RELEASE_ROOT="$work/ws" CARGO=true make -s -C "$repo" "release-$part" > "$work/out.txt" 2>&1 ||
+        fail "make release-$part failed: $(cat "$work/out.txt")"
+    grep -q "^version = \"$want\"\$" "$work/ws/Cargo.toml" || fail "release-$part did not bump to $want"
+    grep -q "^## \[$want\] - " "$work/ws/CHANGELOG.md" || fail "release-$part did not date $want"
+done
+echo "ok - major, minor and patch bump the current version"
+
+# 7. Nothing unreleased, nothing to release.
 fixture
 release 9.9.9 > /dev/null 2>&1
 if release 9.9.10 > "$work/out.txt" 2>&1; then
