@@ -74,6 +74,9 @@ pub struct Args {
     /// Override slos.p99: maximum p99 latency (e.g. 1s; 0s = not enforced).
     #[arg(long, value_name = "DURATION")]
     pub slo_p99: Option<ConfigDuration>,
+    /// Override slos.p999: maximum p99.9 latency (e.g. 2s; 0s = not enforced).
+    #[arg(long, value_name = "DURATION")]
+    pub slo_p999: Option<ConfigDuration>,
     /// Override slos.throughput_min: minimum successful requests per second.
     #[arg(long, value_name = "RPS")]
     pub slo_throughput_min: Option<f64>,
@@ -154,6 +157,7 @@ impl Args {
             (self.slo_p50, &mut s.p50),
             (self.slo_p95, &mut s.p95),
             (self.slo_p99, &mut s.p99),
+            (self.slo_p999, &mut s.p999),
         ] {
             if let Some(d) = flag {
                 *slo = d;
@@ -461,6 +465,13 @@ mod tests {
         assert_eq!(cfg.target.headers["X-Keep"], "k");
         assert_eq!(cfg.target.headers["X-A"], "1");
         assert_eq!(cfg.target.headers["X-B"], "two words");
+    }
+
+    #[test]
+    fn slo_p999_flag_overrides() {
+        let mut cfg = Config::default();
+        Args::parse_from(["redliner", "--slo-p999", "750ms"]).apply_overrides(&mut cfg);
+        assert_eq!(cfg.slos.p999.as_std(), std::time::Duration::from_millis(750));
     }
 
     #[test]

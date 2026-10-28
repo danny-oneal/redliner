@@ -419,9 +419,11 @@ fn print_summary(
     println!("rate (actual) : {:.1} rps", m.rate);
     println!("throughput    : {:.1} rps (successful)", m.throughput);
     println!("success       : {:.3}%", m.success * 100.0);
+    println!("status        : {}", report::status_classes(&m.status_codes));
     println!("latency p50   : {}", fmt_dur(m.latencies.p50));
     println!("latency p95   : {}", fmt_dur(m.latencies.p95));
     println!("latency p99   : {}", fmt_dur(m.latencies.p99));
+    println!("latency p99.9 : {}", fmt_dur(m.latencies.p999));
     println!("latency max   : {}", fmt_dur(m.latencies.max));
 
     if !per_op.is_empty() {
