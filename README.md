@@ -115,8 +115,9 @@ setting takes its default (`poisson` at 200 rps for 30s, 2xx/3xx counts as
 success, no SLOs unless you pass `--slo-*` flags). `--rate`, `--duration`,
 `--seed` and the other flags still apply. Credentials in the URL are rejected; pass them with `-H` instead.
 
-**Exit codes:** `0` run passed · `1` an SLO was violated · `2` config or
-runtime error · `130` interrupted.
+**Exit codes:** `0` run passed · `1` an SLO was violated, a replay fell
+behind, or no request succeeded · `2` config or runtime error · `130`
+interrupted.
 
 **Ctrl-C** stops a run early without losing it: no new requests are fired,
 in-flight ones finish (up to `target.timeout`), and the report directory is

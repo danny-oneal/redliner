@@ -404,6 +404,11 @@ single violation makes the process exit `1`. A threshold left at `0` is not
 enforced. Each one has a CLI override (`--slo-success-rate`, `--slo-p50`,
 `--slo-p95`, `--slo-p99`, `--slo-p999`, `--slo-throughput-min`).
 
+Independent of these thresholds, a run in which no request succeeded (none
+fired, or every one failed at the transport layer or a check) fails the
+built-in `successful_requests` check, listed with the SLOs and in `junit.xml`,
+and exits `1`. An interrupted run exits `130` instead.
+
 | key             | type     | notes |
 | --------------- | -------- | ----- |
 | `success_rate`  | float    | minimum fraction of successful requests (e.g. `0.995`); must be 0–1 |

@@ -120,6 +120,11 @@ impl Metrics {
         }
     }
 
+    /// Requests that got a 2xx/3xx response without an error.
+    pub fn successes(&self) -> u64 {
+        self.successes
+    }
+
     /// Finalize derived fields. Idempotent.
     pub fn close(&mut self) {
         self.errors = self.error_set.iter().cloned().collect();
@@ -209,6 +214,13 @@ mod tests {
         assert_eq!(m.errors.len(), 1);
         assert_eq!(m.bytes_in, 500);
         assert_eq!(m.bytes_out, 200);
+    }
+
+    #[test]
+    fn successes_counts_ok_results() {
+        // results(): 100 hits, every tenth a 500 with an error.
+        assert_eq!(closed().successes(), 90);
+        assert_eq!(Metrics::default().successes(), 0);
     }
 
     #[test]

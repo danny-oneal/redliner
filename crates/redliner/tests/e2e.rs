@@ -673,6 +673,60 @@ async fn e2e_manifest_redacts_header_credentials() {
     assert_eq!(headers["Accept"], "application/json");
 }
 
+/// `--url` args aimed at a port nothing listens on.
+fn dead_target_args(out: &str, duration: &str) -> Args {
+    Args::parse_from([
+        "redliner", "--url", "http://127.0.0.1:1/", "--rate", "20", "--duration", duration,
+        "--live-stats", "0s", "--out", out,
+    ])
+}
+
+fn has_slo(manifest: &serde_json::Value, name: &str) -> bool {
+    manifest["slo_results"]
+        .as_array()
+        .is_some_and(|rs| rs.iter().any(|r| r["name"] == name))
+}
+
+#[tokio::test]
+async fn e2e_dead_target_without_slos_exits_one() {
+    let dir = tempdir("dead");
+    assert_eq!(run(dead_target_args(dir.to_str().unwrap(), "1s")).await, Exit::SloFailed);
+
+    let manifest = read_manifest(&dir);
+    assert_eq!(manifest["passed"], false);
+    let r = manifest["slo_results"]
+        .as_array()
+        .and_then(|rs| rs.iter().find(|r| r["name"] == "successful_requests"))
+        .expect("successful_requests result")
+        .clone();
+    assert_eq!(r["passed"], false);
+    let observed = r["observed"].as_str().unwrap();
+    assert!(observed.starts_with("0 of ") && observed != "0 of 0", "{observed}");
+}
+
+#[tokio::test]
+async fn e2e_all_checks_failed_without_slos_exits_one() {
+    // Every response is a 200 carrying GraphQL `errors`: answered, never succeeded.
+    let mock = spawn_error_mock().await;
+    let dir = tempdir("allfail");
+    let cfg = write_cfg(&dir, &mock.url, "");
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::SloFailed);
+    assert!(mock.hits.load(Ordering::SeqCst) > 10);
+    assert!(has_slo(&read_manifest(&dir), "successful_requests"));
+}
+
+#[tokio::test]
+async fn e2e_interrupted_dead_target_exits_130() {
+    let dir = tempdir("dead-int");
+    let exit = run_with_interrupt(
+        dead_target_args(dir.to_str().unwrap(), "30s"),
+        tokio::time::sleep(std::time::Duration::from_millis(500)),
+    )
+    .await;
+    assert_eq!(exit, Exit::Interrupted);
+    assert!(!has_slo(&read_manifest(&dir), "successful_requests"));
+}
+
 #[tokio::test]
 async fn e2e_zero_config_sends_method_and_body() {
     let mock = spawn_mock().await;

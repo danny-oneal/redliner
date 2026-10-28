@@ -12,6 +12,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `target.headers`, `-H`, or scenario and harvest headers; they are written as
   `<redacted>`.
 
+### Changed
+- A run in which no request succeeded now exits `1` (built-in
+  `successful_requests` check) even with no SLOs configured; previously a
+  down target passed.
+
 ## [0.4.0] - 2026-10-27
 
 ### Added

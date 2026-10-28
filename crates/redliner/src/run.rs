@@ -286,6 +286,22 @@ where
         }
     }
 
+    // A run where nothing succeeded measured nothing (the target is down, or
+    // every answer failed a check): fail it even when no SLO is enforced.
+    let mut none_succeeded = false;
+    if !interrupted {
+        if let Some(r) = slo::no_success(collector.overall()) {
+            eprintln!(
+                "warning: no request succeeded ({}; status: {}); is the target up?",
+                r.observed,
+                report::status_classes(&collector.overall().status_codes)
+            );
+            results.push(r);
+            none_succeeded = true;
+            passed = false;
+        }
+    }
+
     manifest.finished_at = Some(report::utc_rfc3339(SystemTime::now()));
     manifest.requests = Some(collector.overall().requests);
     manifest.slo_results = results.clone();
@@ -312,7 +328,7 @@ where
     if interrupted {
         return Ok(Exit::Interrupted);
     }
-    if fell_behind || (cfg.slos.enforced() && !passed) {
+    if fell_behind || none_succeeded || (cfg.slos.enforced() && !passed) {
         return Ok(Exit::SloFailed);
     }
     Ok(Exit::Ok)
