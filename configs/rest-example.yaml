@@ -52,6 +52,8 @@ scenarios:
       method: POST
       path: /orders
       body: '{"clientRef": "{{order_refs}}", "productId": {{product_ids}}, "quantity": {{quantities}}}'
+      headers:
+        Idempotency-Key: "{{order_refs}}"   # its own draw: a fresh UUID per request
 
 checks:
   status: [200, 201]                # anything else is a failure

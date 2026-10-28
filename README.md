@@ -29,8 +29,8 @@ binary (`redliner`).
 - **GraphQL and REST** behind one encoder seam — switch with `target.protocol`.
 - **Pacing profiles:** `constant`, `poisson` (seeded, self-correcting),
   `ramp`, and `steps` (to find the throughput knee).
-- **Data pools & templating:** `{{pool}}` placeholders in paths, bodies, and
-  GraphQL variables, sampled from `list` / `range` / `file` pools or values
+- **Data pools & templating:** `{{pool}}` placeholders in paths, bodies, REST
+  scenario headers, and GraphQL variables, sampled from `list` / `range` / `file` pools or values
   **harvested** from the live service by JSON path. `uuid`, `sequence` and
   `timestamp` pools generate unique values (idempotency keys, emails,
   correlation IDs) with no setup.

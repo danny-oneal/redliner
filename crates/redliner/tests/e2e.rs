@@ -11,6 +11,8 @@ struct Mock {
     hits: Arc<AtomicUsize>,
     bodies: Arc<Mutex<Vec<String>>>,
     lines: Arc<Mutex<Vec<String>>>,
+    /// Each request's header block (spawn_mock / spawn_mock_seeded only).
+    heads: Arc<Mutex<Vec<String>>>,
 }
 
 async fn spawn_mock() -> Mock {
@@ -26,11 +28,12 @@ async fn spawn_mock_seeded(seed: Option<&'static str>) -> Mock {
     let hits = Arc::new(AtomicUsize::new(0));
     let bodies = Arc::new(Mutex::new(Vec::new()));
     let lines = Arc::new(Mutex::new(Vec::new()));
-    let (h, b, l) = (hits.clone(), bodies.clone(), lines.clone());
+    let heads = Arc::new(Mutex::new(Vec::new()));
+    let (h, b, l, hd) = (hits.clone(), bodies.clone(), lines.clone(), heads.clone());
     tokio::spawn(async move {
         loop {
             let Ok((mut sock, _)) = listener.accept().await else { break };
-            let (h, b, l) = (h.clone(), b.clone(), l.clone());
+            let (h, b, l, hd) = (h.clone(), b.clone(), l.clone(), hd.clone());
             tokio::spawn(async move {
                 let mut data = Vec::new();
                 let mut buf = [0u8; 4096];
@@ -55,6 +58,7 @@ async fn spawn_mock_seeded(seed: Option<&'static str>) -> Mock {
                             let body = text[idx + 4..].to_string();
                             let first = text.split("\r\n").next().unwrap_or("").to_string();
                             l.lock().unwrap().push(first);
+                            hd.lock().unwrap().push(text[..idx].to_string());
                             let is_post = text.starts_with("POST");
                             b.lock().unwrap().push(format!("{is_post}|{body}"));
                             let payload = match seed {
@@ -73,7 +77,7 @@ async fn spawn_mock_seeded(seed: Option<&'static str>) -> Mock {
             });
         }
     });
-    Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines }
+    Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines, heads }
 }
 
 /// Like `spawn_mock`, but answers EVERY request with a GraphQL `errors`
@@ -128,7 +132,7 @@ async fn spawn_error_mock() -> Mock {
             });
         }
     });
-    Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines }
+    Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines, heads: Arc::default() }
 }
 
 /// Like `spawn_mock`, but sleeps `delay` before answering each request, so a
@@ -184,7 +188,7 @@ async fn spawn_slow_mock(delay: std::time::Duration) -> Mock {
             });
         }
     });
-    Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines }
+    Mock { url: format!("http://{addr}/graphql"), hits, bodies, lines, heads: Arc::default() }
 }
 
 fn tempdir(tag: &str) -> std::path::PathBuf {
@@ -1016,5 +1020,35 @@ async fn e2e_insecure_tls_covers_the_harvest_probe() {
     write(true);
     assert_eq!(run(args(&p, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
     assert!(hits.load(Ordering::SeqCst) > 1, "harvest probe plus attack traffic");
+}
+
+#[tokio::test]
+async fn e2e_rest_header_placeholders_send_a_fresh_value_per_request() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("header-templates");
+    let base = mock.url.trim_end_matches("/graphql");
+    let p = dir.join("cfg.yaml");
+    std::fs::write(
+        &p,
+        format!(
+            "target:\n  url: {base}\n  protocol: rest\nload:\n  profile: constant\n  rate: 50\n  duration: 500ms\n\
+             data:\n  pools:\n    keys: {{ type: uuid }}\n\
+             scenarios:\n  - name: create\n    weight: 1\n    request:\n      method: POST\n      path: /orders\n      body: \"{{}}\"\n\
+             \x20     headers:\n        Idempotency-Key: \"{{{{keys}}}}\"\n"
+        ),
+    )
+    .unwrap();
+    assert_eq!(run(args(&p, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
+    let keys: Vec<String> = mock
+        .heads
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("idempotency-key: ").map(str::to_string)))
+        .collect();
+    assert!(keys.len() > 5, "keys: {keys:?}");
+    assert!(keys.iter().all(|k| k.len() == 36 && !k.contains('{')), "keys: {keys:?}");
+    let unique: std::collections::BTreeSet<_> = keys.iter().collect();
+    assert_eq!(unique.len(), keys.len(), "every request gets its own key");
 }
 

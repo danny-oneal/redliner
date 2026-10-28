@@ -10,8 +10,18 @@ use crate::data::{render_string, Pools};
 struct RestRoute {
     name: String,
     method: String,
+    /// Headers with fixed values.
     headers: HeaderMap,
+    /// Headers whose values hold `{{pool}}` placeholders, rendered per request.
+    templated: Vec<HeaderTemplate>,
     pattern: regex::Regex,
+}
+
+struct HeaderTemplate {
+    name: HeaderName,
+    /// The key as written in the config, for error messages.
+    key: String,
+    value: String,
 }
 
 pub struct RestEncoder {
@@ -28,12 +38,18 @@ impl RestEncoder {
             let r = &sc.request;
             // Per-route clone so scenario headers never leak into the base or other routes.
             let mut headers = base.clone();
+            let mut templated = Vec::new();
             for (k, v) in &r.headers {
                 let n = HeaderName::from_bytes(k.as_bytes())
                     .map_err(|e| EncodeError::InvalidHeader(format!("{k}: {e}")))?;
-                let v = HeaderValue::from_str(v)
+                // Checked even when templated, so a bad character fails at startup.
+                let hv = HeaderValue::from_str(v)
                     .map_err(|e| EncodeError::InvalidHeader(format!("{k}: {e}")))?;
-                headers.insert(n, v);
+                if v.contains("{{") {
+                    templated.push(HeaderTemplate { name: n, key: k.clone(), value: v.clone() });
+                } else {
+                    headers.insert(n, hv);
+                }
             }
             if !r.body.is_empty() && !headers.contains_key("content-type") {
                 headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -42,6 +58,7 @@ impl RestEncoder {
                 name: sc.name.clone(),
                 method: r.method.to_ascii_uppercase(),
                 headers,
+                templated,
                 pattern: path_pattern(&base_url, &r.path),
             });
         }
@@ -72,6 +89,14 @@ impl Encoder for RestEncoder {
         t.header = route.headers.clone();
         if !sc.request.body.is_empty() {
             t.body = render_string(&sc.request.body, pools, rng)?.into_bytes();
+        }
+        // After the path and body, so adding a templated header to a seeded
+        // config leaves the paths and bodies it draws unchanged.
+        for h in &route.templated {
+            let v = render_string(&h.value, pools, rng)?;
+            let v = HeaderValue::from_str(&v)
+                .map_err(|e| EncodeError::InvalidHeader(format!("{}: {e}", h.key)))?;
+            t.header.insert(h.name.clone(), v);
         }
         Ok(())
     }
@@ -221,4 +246,55 @@ mod tests {
         enc.encode(&mut t, &s, &pools, &mut rng()).unwrap();
         assert_eq!(t.url, "http://h/products/5");
     }
+
+    #[test]
+    fn rest_header_placeholders_render_per_request() {
+        let s = sc("Create", "POST", "/orders", "{}", &[("Idempotency-Key", "{{keys}}"), ("X-Trace", "run-{{n}}"), ("X-Static", "s")]);
+        let enc = RestEncoder::new(&target("http://h"), std::slice::from_ref(&s)).unwrap();
+        let mut pools = Pools::new();
+        pools.insert("keys".into(), Pool::Uuid);
+        pools.insert("n".into(), Pool::Sequence(Default::default()));
+        let mut r = rng();
+        let (mut a, mut b) = (Target::default(), Target::default());
+        enc.encode(&mut a, &s, &pools, &mut r).unwrap();
+        enc.encode(&mut b, &s, &pools, &mut r).unwrap();
+        let key = |t: &Target| t.header["idempotency-key"].to_str().unwrap().to_string();
+        assert_eq!(key(&a).len(), 36, "{}", key(&a));
+        assert_ne!(key(&a), key(&b), "a fresh key per request");
+        assert_eq!(a.header["x-trace"], "run-0");
+        assert_eq!(b.header["x-trace"], "run-1");
+        assert_eq!(a.header["x-static"], "s");
+        assert!(a.header.get("x-trace").is_some() && a.header.get_all("x-trace").iter().count() == 1);
+    }
+
+    #[test]
+    fn rest_header_templates_leave_path_and_body_draws_unchanged() {
+        // Headers render after the path and body, so adding a templated
+        // header to a seeded config doesn't change the paths and bodies it sent.
+        let plain = sc("A", "POST", "/items/{{id}}", "{\"id\":{{id}}}", &[]);
+        let templated = sc("A", "POST", "/items/{{id}}", "{\"id\":{{id}}}", &[("X-Id", "{{id}}")]);
+        let mut pools = Pools::new();
+        pools.insert("id".into(), Pool::Range { min: 1, max: 1_000_000 });
+        let sent = |s: &Scenario| {
+            let enc = RestEncoder::new(&target("http://h"), std::slice::from_ref(s)).unwrap();
+            let mut t = Target::default();
+            enc.encode(&mut t, s, &pools, &mut rng()).unwrap();
+            (t.url, t.body)
+        };
+        assert_eq!(sent(&plain), sent(&templated));
+    }
+
+    #[test]
+    fn rest_header_rendered_value_must_be_valid() {
+        let s = sc("A", "GET", "/a", "", &[("X-V", "{{v}}")]);
+        let enc = RestEncoder::new(&target("http://h"), std::slice::from_ref(&s)).unwrap();
+        let mut pools = Pools::new();
+        pools.insert("v".into(), Pool::List(vec![serde_json::json!("a\nb")]));
+        let err = enc.encode(&mut Target::default(), &s, &pools, &mut rng()).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidHeader(ref m) if m.starts_with("X-V: ")), "{err}");
+
+        let err = enc.encode(&mut Target::default(), &s, &Pools::new(), &mut rng()).unwrap_err();
+        assert!(matches!(err, EncodeError::UnknownPool(ref p) if p == "v"), "{err}");
+    }
 }
+

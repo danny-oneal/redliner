@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Placeholders in REST scenario headers:** `headers` values in a REST
+  scenario take `{{pool}}` placeholders, rendered per request. For example,
+  `Idempotency-Key: "{{order_refs}}"` with a `uuid` pool sends a fresh key on
+  every request. They render after the path and body, so adding one to a
+  seeded config doesn't change the paths and bodies it sends. `target.headers`
+  and `-H` are still sent as written.
 - **`target.insecure_tls` / `--insecure` (`-k`)** skips TLS certificate
   verification, so runs can reach staging or in-cluster services with
   self-signed certs. It covers the harvest probe as well as attack traffic,
