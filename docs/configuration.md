@@ -278,6 +278,13 @@ previous run (idempotency keys against a persistent store), leave `seed` at
 `0` (time-based) or pass a new `--seed`. `timestamp` reads the clock, so it is
 the one pool a seed can't reproduce.
 
+REST scenario `headers` take placeholders too, which is how an idempotency key
+or correlation ID gets a fresh value on every request. They render after the
+path and body, so adding one to a seeded config doesn't change the paths and
+bodies it sends. `target.headers` and `-H` are sent as written: they're shared
+by every request, including the harvest probe, which runs before the pools
+exist.
+
 ### `data.harvest`
 
 A list of probe requests run once, before the attack. Each extracts values by
@@ -325,7 +332,7 @@ instead.
 | `method`  | string | `GET`   | upper-cased |
 | `path`    | string | —       | appended to `target.url`; may contain `{{pool}}` placeholders |
 | `body`    | string | —       | request body; `{{pool}}` placeholders are rendered; sets `Content-Type: application/json` when present and none is given |
-| `headers` | map    | `{}`    | per-scenario, override the base headers for that route only |
+| `headers` | map    | `{}`    | per-scenario, override the base headers for that route only; values may contain `{{pool}}` placeholders (e.g. `Idempotency-Key: "{{order_refs}}"`), rendered per request after the path and body |
 
 **Templating.** A value that is *exactly* one placeholder keeps the sampled
 value's native type (`id: "{{ids}}"` encodes as a JSON number); an embedded

@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Placeholders in REST scenario headers:** `headers` values in a REST
+  scenario take `{{pool}}` placeholders, rendered per request. For example,
+  `Idempotency-Key: "{{order_refs}}"` with a `uuid` pool sends a fresh key on
+  every request. They render after the path and body, so adding one to a
+  seeded config doesn't change the paths and bodies it sends. `target.headers`
+  and `-H` are still sent as written.
 - **p99.9 latency** in the run summary, `text.txt` and `metrics.json`
   (`latencies.p999`), with an SLO for it: `slos.p999` / `--slo-p999`.
 - **Status classes** in the run summary and `text.txt`: one line such as
