@@ -76,8 +76,10 @@ Versions follow [SemVer](https://semver.org). Both crates share one version,
 set once under `[workspace.package]` in the root `Cargo.toml`, and redliner
 pins the engine to exactly that version. Don't tag by hand. To cut a release:
 
-1. On a branch from `main`, run `make release VERSION=X.Y.Z`. It bumps the
-   version and the engine pin, moves the changelog's *Unreleased* section
+1. On a branch from `main`, run `make release-patch`, `make release-minor`
+   or `make release-major` to bump that part of the current version, or
+   `make release VERSION=X.Y.Z` to set one. It bumps the version and the
+   engine pin, moves the changelog's *Unreleased* section
    under `## [X.Y.Z] - <today>`, and refreshes `Cargo.lock`.
 2. Commit that as `chore(release): X.Y.Z` and open a PR. The PR builds every
    target, and the build fails if the changelog has no notes for `X.Y.Z`.

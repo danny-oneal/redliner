@@ -5,7 +5,8 @@
 # "chore(release): <version>" in a PR; when it merges, the release workflow
 # tags v<version>, builds every target and publishes the GitHub release.
 #
-# Usage: scripts/release.sh <version>    (or: make release VERSION=<version>)
+# Usage: scripts/release.sh <X.Y.Z | major | minor | patch>
+#   make release VERSION=X.Y.Z, or make release-major / -minor / -patch
 set -eu
 
 die() {
@@ -14,15 +15,27 @@ die() {
 }
 
 version=${1:-}
-printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
-    die "usage: release.sh X.Y.Z (got '${version}')"
+# Resolved before the cd below, so a relative $0 still finds the helper.
+here=$(cd "$(dirname "$0")" && pwd)
 
 # RELEASE_ROOT and CARGO let scripts/test-release.sh run this on a copy.
-cd "${RELEASE_ROOT:-$(dirname "$0")/..}"
+cd "${RELEASE_ROOT:-$here/..}"
 cargo=${CARGO:-cargo}
 
 current=$(sed -n '/^\[workspace\.package\]/,/^\[/ s/^version = "\(.*\)"$/\1/p' Cargo.toml)
 [ -n "$current" ] || die "no [workspace.package] version in Cargo.toml"
+
+# major / minor / patch: bump that part of the current version, zeroing the rest.
+case $version in
+    major | minor | patch)
+        version=$(printf '%s\n' "$current" | awk -F. -v part="$version" '{
+            if (part == "major") print ($1 + 1) ".0.0"
+            else if (part == "minor") print $1 "." ($2 + 1) ".0"
+            else print $1 "." $2 "." ($3 + 1)
+        }') ;;
+esac
+printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
+    die "usage: release.sh X.Y.Z|major|minor|patch (got '${version}')"
 
 # Newer than the current version, comparing major, minor, patch as numbers.
 newer=$(printf '%s %s\n' "$version" "$current" | awk '{
@@ -35,7 +48,7 @@ newer=$(printf '%s %s\n' "$version" "$current" | awk '{
 }')
 [ "$newer" = yes ] || die "$version is not newer than the current $current"
 
-[ -n "$(sh "$(dirname "$0")/changelog-section.sh" Unreleased CHANGELOG.md 2>/dev/null)" ] ||
+[ -n "$(sh "$here/changelog-section.sh" Unreleased CHANGELOG.md 2>/dev/null)" ] ||
     die "nothing under ## [Unreleased] in CHANGELOG.md to release"
 
 # The previous release, from the Unreleased compare link (v0.1.0...HEAD).

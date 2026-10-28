@@ -2,7 +2,8 @@
 # CONFIG overrides the scenario file used by `run` / `validate`.
 CONFIG ?= configs/graphql-catalog.yaml
 
-.PHONY: build test lint install test-install test-release release run validate clean \
+.PHONY: build test lint install test-install test-release release release-major release-minor release-patch \
+        run validate clean \
         docker-build image-save k3s-import k3s-deploy k3s-logs
 
 ## build the release binary
@@ -32,6 +33,10 @@ test-release:
 ## prepare a release: bump the version and date the changelog (make release VERSION=0.2.0)
 release:
 	sh scripts/release.sh $(VERSION)
+
+## prepare a release that bumps one part of the current version: 0.3.0 -> 1.0.0 / 0.4.0 / 0.3.1
+release-major release-minor release-patch:
+	sh scripts/release.sh $(@:release-%=%)
 
 ## run a scenario (make run CONFIG=configs/rest-example.yaml)
 run:

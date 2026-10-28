@@ -61,6 +61,6 @@ Use the `rust-skills` skill when writing or reviewing Rust here. Where it confli
 
 - Conventional Commits with an optional crate/area scope: `feat(volley): ...`, `fix(config): ...`.
 - Add user-visible changes to `CHANGELOG.md` under *Unreleased*.
-- Never tag releases by hand. The version lives once, in `[workspace.package]` of the root `Cargo.toml`. A release is a `chore(release): X.Y.Z` PR made with `make release VERSION=X.Y.Z`; merging it makes `release.yml` tag `vX.Y.Z`, build every target and publish the GitHub release, with that version's CHANGELOG section as the notes.
+- Never tag releases by hand. The version lives once, in `[workspace.package]` of the root `Cargo.toml`. A release is a `chore(release): X.Y.Z` PR made with `make release-patch` / `release-minor` / `release-major` (or `make release VERSION=X.Y.Z`); merging it makes `release.yml` tag `vX.Y.Z`, build every target and publish the GitHub release, with that version's CHANGELOG section as the notes.
 - Larger features get a design spec in `docs/superpowers/specs/` and an implementation plan in `docs/superpowers/plans/` (dated `YYYY-MM-DD-<topic>.md`); read the relevant ones before extending replay or the Docker/K3s deploy.
 - `codebook.toml` is the spell-checker word list; add project terms there.
