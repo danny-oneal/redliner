@@ -298,6 +298,38 @@ pub struct RunManifest {
     pub aborted: bool,
 }
 
+/// Status codes grouped by class, e.g. `2xx 480, 4xx 12, no response 3`;
+/// classes with no requests are left out. Code `0` is a request that got no
+/// HTTP response (timeout, refused, TLS failure).
+pub fn status_classes(codes: &BTreeMap<u16, u64>) -> String {
+    let mut classes: BTreeMap<u16, u64> = BTreeMap::new();
+    for (&code, &n) in codes {
+        let class = match code {
+            0 => 0,
+            100..=599 => code / 100,
+            _ => 9,
+        };
+        *classes.entry(class).or_insert(0) += n;
+    }
+    // Responses by class first, then the ones that never got a response.
+    let mut parts: Vec<String> = classes
+        .iter()
+        .filter(|(c, _)| (1..=5).contains(*c))
+        .map(|(c, n)| format!("{c}xx {n}"))
+        .collect();
+    if let Some(n) = classes.get(&9) {
+        parts.push(format!("other {n}"));
+    }
+    if let Some(n) = classes.get(&0) {
+        parts.push(format!("no response {n}"));
+    }
+    if parts.is_empty() {
+        "none".into()
+    } else {
+        parts.join(", ")
+    }
+}
+
 /// An RFC3339-ish UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`) for manifests.
 pub fn utc_rfc3339(t: SystemTime) -> String {
     let secs = t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
@@ -342,6 +374,7 @@ struct LatenciesJson {
     p90: String,
     p95: String,
     p99: String,
+    p999: String,
     max: String,
     min: String,
 }
@@ -376,6 +409,7 @@ impl MetricsJson {
                 p90: fmt_dur(m.latencies.p90),
                 p95: fmt_dur(m.latencies.p95),
                 p99: fmt_dur(m.latencies.p99),
+                p999: fmt_dur(m.latencies.p999),
                 max: fmt_dur(m.latencies.max),
                 min: fmt_dur(m.latencies.min),
             },
@@ -392,7 +426,9 @@ fn text_summary(m: &Metrics) -> String {
     s.push_str(&format!("p50        : {}\n", fmt_dur(m.latencies.p50)));
     s.push_str(&format!("p95        : {}\n", fmt_dur(m.latencies.p95)));
     s.push_str(&format!("p99        : {}\n", fmt_dur(m.latencies.p99)));
+    s.push_str(&format!("p99.9      : {}\n", fmt_dur(m.latencies.p999)));
     s.push_str(&format!("max        : {}\n", fmt_dur(m.latencies.max)));
+    s.push_str(&format!("status     : {}\n", status_classes(&m.status_codes)));
     s.push_str("status codes:\n");
     for (code, n) in &m.status_codes {
         s.push_str(&format!("  {code} : {n}\n"));
@@ -518,6 +554,20 @@ mod tests {
         let m: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("metrics.json")).unwrap()).unwrap();
         assert_eq!(m["requests"], 1);
+        assert_eq!(m["latencies"]["p999"], "2ms");
+        let text = fs::read_to_string(dir.join("text.txt")).unwrap();
+        assert!(text.contains("p99.9      : 2ms\n"), "{text}");
+        assert!(text.contains("status     : 2xx 1\n"), "{text}");
+    }
+
+    #[test]
+    fn status_classes_group_codes_by_hundred() {
+        let codes = BTreeMap::from([(200, 5), (201, 1), (302, 2), (404, 2), (429, 1), (503, 1), (0, 3)]);
+        assert_eq!(status_classes(&codes), "2xx 6, 3xx 2, 4xx 3, 5xx 1, no response 3");
+        assert_eq!(status_classes(&BTreeMap::from([(200, 4)])), "2xx 4");
+        assert_eq!(status_classes(&BTreeMap::from([(0, 2)])), "no response 2");
+        assert_eq!(status_classes(&BTreeMap::from([(799, 1), (101, 1)])), "1xx 1, other 1");
+        assert_eq!(status_classes(&BTreeMap::new()), "none");
     }
 
     #[test]

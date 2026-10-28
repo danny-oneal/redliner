@@ -228,6 +228,7 @@ pub struct SloConfig {
     pub p50: ConfigDuration,
     pub p95: ConfigDuration,
     pub p99: ConfigDuration,
+    pub p999: ConfigDuration,
     pub throughput_min: f64,
 }
 
@@ -237,6 +238,7 @@ impl SloConfig {
             || !self.p50.as_std().is_zero()
             || !self.p95.as_std().is_zero()
             || !self.p99.as_std().is_zero()
+            || !self.p999.as_std().is_zero()
             || self.throughput_min > 0.0
     }
 }

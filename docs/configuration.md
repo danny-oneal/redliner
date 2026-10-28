@@ -388,12 +388,12 @@ genuine transport error is never masked.
 Optional. Any threshold set is evaluated against the run's overall metrics; a
 single violation makes the process exit `1`. A threshold left at `0` is not
 enforced. Each one has a CLI override (`--slo-success-rate`, `--slo-p50`,
-`--slo-p95`, `--slo-p99`, `--slo-throughput-min`).
+`--slo-p95`, `--slo-p99`, `--slo-p999`, `--slo-throughput-min`).
 
 | key             | type     | notes |
 | --------------- | -------- | ----- |
 | `success_rate`  | float    | minimum fraction of successful requests (e.g. `0.995`); must be 0–1 |
-| `p50` / `p95` / `p99` | duration | maximum latency at that percentile |
+| `p50` / `p95` / `p99` / `p999` | duration | maximum latency at that percentile (`p999` is p99.9, the slowest 1 in 1000) |
 | `throughput_min`| float    | minimum successful requests per second; must be >= 0 |
 
 ## `report`

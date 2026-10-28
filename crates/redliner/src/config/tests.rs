@@ -76,6 +76,12 @@ fn slos_accept_the_edges() {
 }
 
 #[test]
+fn slos_p999_parses() {
+    let c = load_str(&format!("{GQL_HEAD}slos:\n  p999: 2s\n{ONE_GQL}")).unwrap();
+    assert_eq!(c.slos.p999.as_std(), Duration::from_secs(2));
+}
+
+#[test]
 fn live_stats_zero_turns_it_off() {
     let c = load_str(&format!("{GQL_HEAD}report:\n  live_stats: 0s\n{ONE_GQL}")).unwrap();
     assert_eq!(c.report.live_stats, Some(ConfigDuration(Duration::ZERO)));
