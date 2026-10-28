@@ -79,6 +79,12 @@ auth:
 | `max_workers` | int   | `100000`  | hard cap on in-flight requests |
 | `seed`     | int      | `0`       | `0` derives a seed from the wall clock and records it; a fixed value reproduces pacing and sampling exactly |
 
+A load that cannot fire a single request is rejected: `constant` and each
+`steps` entry need `rate × duration > 1` (the first hit is due at `1/rate`,
+and a hit due exactly at the end is not sent), `poisson` needs
+`rate × duration ≥ 1`, and `ramp` needs `(from + to) / 2 × duration ≥ 1`.
+Rates must be finite.
+
 ```yaml
 # ramp: climb linearly from 50 to 500 rps over `duration`
 load: { profile: ramp, duration: 2m, ramp: { from: 50, to: 500 } }

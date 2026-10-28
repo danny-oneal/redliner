@@ -495,13 +495,31 @@ impl Config {
         } else {
             match l.profile.as_str() {
                 "constant" | "poisson" => {
-                    if l.rate <= 0.0 {
-                        errs.push(format!("load.rate must be > 0 for profile {:?}", l.profile));
+                    let dur = l.duration.as_std();
+                    if !positive_finite(l.rate) {
+                        errs.push(format!(
+                            "load.rate must be > 0 and finite for profile {:?}",
+                            l.profile
+                        ));
+                    } else if fires_nothing(l.rate * dur.as_secs_f64(), l.profile == "constant") {
+                        errs.push(format!(
+                            "load.rate × load.duration fires no requests for profile {:?} \
+                             ({} rps for {dur:?}); raise either",
+                            l.profile, l.rate
+                        ));
                     }
                 }
                 "ramp" => {
-                    if l.ramp.from < 0.0 || l.ramp.to <= 0.0 {
-                        errs.push("load.ramp.from/to must be set for profile ramp".into());
+                    let (from, to) = (l.ramp.from, l.ramp.to);
+                    let dur = l.duration.as_std();
+                    if !(from.is_finite() && from >= 0.0 && positive_finite(to)) {
+                        errs.push("load.ramp.from/to must be set for profile ramp \
+                                   (finite, from >= 0, to > 0)".into());
+                    } else if fires_nothing((from + to) / 2.0 * dur.as_secs_f64(), false) {
+                        errs.push(format!(
+                            "load.ramp averages {} rps over {dur:?}, which fires no requests",
+                            (from + to) / 2.0
+                        ));
                     }
                 }
                 "steps" => {
@@ -509,8 +527,16 @@ impl Config {
                         errs.push("load.steps must be non-empty for profile steps".into());
                     }
                     for (i, s) in l.steps.iter().enumerate() {
-                        if s.rate <= 0.0 || s.duration.as_std().is_zero() {
-                            errs.push(format!("load.steps[{i}]: rate and duration must be > 0"));
+                        let dur = s.duration.as_std();
+                        if !positive_finite(s.rate) || dur.is_zero() {
+                            errs.push(format!(
+                                "load.steps[{i}]: rate and duration must be > 0 and finite"
+                            ));
+                        } else if fires_nothing(s.rate * dur.as_secs_f64(), true) {
+                            errs.push(format!(
+                                "load.steps[{i}]: {} rps for {dur:?} fires no requests",
+                                s.rate
+                            ));
                         }
                     }
                 }
@@ -643,6 +669,21 @@ impl Config {
             }
         }
         errs
+    }
+}
+
+fn positive_finite(x: f64) -> bool {
+    x.is_finite() && x > 0.0
+}
+
+/// Whether a load expected to send `expected` requests sends none. Constant
+/// pacing puts the first hit at `1/rate` and never fires one due exactly at
+/// the deadline, so it needs more than one; Poisson and ramp need one.
+fn fires_nothing(expected: f64, constant_pacing: bool) -> bool {
+    if constant_pacing {
+        expected <= 1.0
+    } else {
+        expected < 1.0
     }
 }
 

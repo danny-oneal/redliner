@@ -233,6 +233,52 @@ fn scenario_name_weight_duplicates() {
     assert!(t.contains("scenarios[2]: duplicate name \"a\""));
 }
 
+/// Loads a GraphQL config whose `load:` is the flow mapping `load`.
+fn with_load(load: &str) -> Result<Config, ConfigError> {
+    load_str(&format!("{GQL_HEAD}load: {{{load}}}\n{ONE_GQL}"))
+}
+
+#[test]
+fn non_finite_rates_are_rejected() {
+    for rate in [".nan", ".inf"] {
+        let t = err_text(with_load(&format!("profile: constant, rate: {rate}, duration: 1s")));
+        assert!(t.contains("load.rate must be > 0 and finite"), "{rate}: {t}");
+    }
+    let t = err_text(with_load("profile: steps, steps: [{rate: .nan, duration: 1s}]"));
+    assert!(t.contains("load.steps[0]: rate and duration must be > 0 and finite"), "{t}");
+    let t = err_text(with_load("profile: ramp, ramp: {from: .nan, to: 10}, duration: 1s"));
+    assert!(t.contains("load.ramp"), "{t}");
+}
+
+#[test]
+fn load_that_fires_nothing_is_rejected() {
+    for load in [
+        "profile: constant, rate: 0.5, duration: 1s",
+        "profile: constant, rate: 1, duration: 1s",
+        "profile: poisson, rate: 0.5, duration: 1s",
+        "profile: ramp, ramp: {from: 0, to: 0.5}, duration: 1s",
+    ] {
+        let t = err_text(with_load(load));
+        assert!(t.contains("fires no requests"), "{load}: {t}");
+    }
+    let t = err_text(with_load(
+        "profile: steps, steps: [{rate: 10, duration: 1s}, {rate: 0.5, duration: 1s}]",
+    ));
+    assert!(t.contains("load.steps[1]") && t.contains("fires no requests"), "{t}");
+    assert!(!t.contains("load.steps[0]"), "{t}");
+}
+
+#[test]
+fn fractional_rates_that_fire_are_accepted() {
+    for load in [
+        "profile: constant, rate: 0.5, duration: 3s",
+        "profile: poisson, rate: 0.5, duration: 2s",
+        "profile: ramp, ramp: {from: 0.5, to: 2.5}, duration: 10s",
+    ] {
+        assert!(with_load(load).is_ok(), "{load}");
+    }
+}
+
 #[test]
 fn load_profiles_validated() {
     let t = err_text(load_str(&format!("{GQL_HEAD}load: {{profile: ramp}}\n{ONE_GQL}")));

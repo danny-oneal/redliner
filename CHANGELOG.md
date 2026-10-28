@@ -20,6 +20,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 - `constant`, `steps` and `ramp` no longer truncate rates to whole numbers:
   `rate: 0.5` fired nothing and `rate: 2.7` ran at 2 rps.
+- Validation rejects non-finite rates (`.nan`, `.inf`) and loads that would
+  fire no requests.
 
 ## [0.4.0] - 2026-10-27
 
