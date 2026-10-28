@@ -5,7 +5,8 @@
 //! p50/p95/p99, throughput and success rate, overall, per phase and per
 //! operation. With a threshold, a latency rise or throughput
 //! drop beyond it is a regression, and the command exits 1, so CI can fail a
-//! build that got slower than its baseline. The success rate is shown in
+//! build that got slower than its baseline. `--junit` writes each gated
+//! metric as a JUnit test case, so CI shows which ones regressed. The success rate is shown in
 //! percentage points but not gated: `slos.success_rate` sets its floor.
 
 use std::collections::BTreeMap;
@@ -18,6 +19,7 @@ use serde::Deserialize;
 
 use crate::cli::CompareArgs;
 use crate::config::ConfigDuration;
+use crate::report::{write_junit_suite, JunitCase};
 use crate::run::Exit;
 use crate::slo::fmt_dur;
 
@@ -97,8 +99,9 @@ impl Comparison {
     }
 }
 
-/// `redliner compare`: prints the comparison; exit 1 on a regression over
-/// `--max-regression`, 2 when a report can't be read.
+/// `redliner compare`: prints the comparison (and writes `--junit`); exit 1
+/// on a regression over `--max-regression`, 2 when a report can't be read or
+/// the JUnit file can't be written.
 pub fn run(args: &CompareArgs) -> Exit {
     let loaded = load(&args.baseline).and_then(|b| Ok((b, load(&args.candidate)?)));
     let (base, cand) = match loaded {
@@ -113,6 +116,13 @@ pub fn run(args: &CompareArgs) -> Exit {
         eprintln!("warning: {w}");
     }
     print!("{}", render(&c, args.max_regression));
+    if let Some(path) = &args.junit {
+        let cases = junit_cases(&c, args.max_regression);
+        if let Err(e) = write_junit_suite(path, "redliner.compare", &cases, Duration::ZERO) {
+            eprintln!("redliner compare: write {}: {e}", path.display());
+            return Exit::Error;
+        }
+    }
     if c.regressions() > 0 {
         Exit::SloFailed
     } else {
@@ -234,6 +244,25 @@ pub fn render(c: &Comparison, max_regression: Option<f64>) -> String {
         }
     };
     out
+}
+
+/// One JUnit test case per gated row (latency and throughput; the success
+/// rate isn't gated), named `<scope> <metric>`; a regression is a failure.
+pub fn junit_cases(c: &Comparison, max_regression: Option<f64>) -> Vec<JunitCase> {
+    c.rows
+        .iter()
+        .filter(|r| !matches!(r.change, Change::Points(_)))
+        .map(|r| JunitCase {
+            name: format!("{} {}", r.scope, r.metric),
+            failure: match (r.regressed, r.change, max_regression) {
+                (true, Change::Percent(p), Some(t)) => Some(format!(
+                    "{} {}: {} -> {} ({p:+.1}%, over the {t}% limit)",
+                    r.scope, r.metric, r.baseline, r.candidate
+                )),
+                _ => None,
+            },
+        })
+        .collect()
 }
 
 /// Parses a threshold such as `10%` or `2.5` (percent).
@@ -622,6 +651,30 @@ mod tests {
         let out = render(&compare(&base, &cand, None), None);
         assert!(!out.contains("REGRESSED"), "{out}");
         assert!(out.trim_end().ends_with("--max-regression not set; nothing gated"), "{out}");
+    }
+
+    #[test]
+    fn junit_has_a_case_per_gated_row() {
+        let base = report(100.0, BASE, &[("GetUser", "5ms", "50ms", "80ms", 1.0)]);
+        let cand = report(100.0, ("10ms", "115ms", "200ms", 100.0, 0.9), &[("GetUser", "5ms", "50ms", "80ms", 1.0)]);
+        let cases = junit_cases(&compare(&base, &cand, Some(10.0)), Some(10.0));
+        let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["overall p50", "overall p95", "overall p99", "overall throughput", "GetUser p50", "GetUser p95", "GetUser p99"],
+            "success rows aren't gated, so they aren't test cases"
+        );
+        let failed: Vec<_> = cases.iter().filter_map(|c| c.failure.as_deref()).collect();
+        assert_eq!(failed, ["overall p95: 100ms -> 115ms (+15.0%, over the 10% limit)"]);
+    }
+
+    #[test]
+    fn junit_without_a_threshold_passes_every_case() {
+        let base = report(100.0, BASE, &[]);
+        let cand = report(100.0, ("50ms", "900ms", "2s", 10.0, 0.5), &[]);
+        let cases = junit_cases(&compare(&base, &cand, None), None);
+        assert_eq!(cases.len(), 4);
+        assert!(cases.iter().all(|c| c.failure.is_none()));
     }
 
     #[test]

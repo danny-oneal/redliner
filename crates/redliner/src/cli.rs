@@ -107,6 +107,9 @@ pub struct CompareArgs {
     /// than this percentage of the baseline (e.g. 10%).
     #[arg(long, value_name = "PERCENT", value_parser = crate::compare::parse_percent)]
     pub max_regression: Option<f64>,
+    /// Also write each gated metric as a JUnit test case to this file.
+    #[arg(long, value_name = "FILE")]
+    pub junit: Option<PathBuf>,
 }
 
 impl Args {
@@ -508,6 +511,14 @@ mod tests {
         let a = Args::parse_from(["redliner", "compare", "base", "cand"]);
         assert!(matches!(a.command, Some(Command::Compare(ref c)) if c.max_regression.is_none()));
         assert!(Args::parse_from(["redliner", "--rate", "5"]).command.is_none());
+    }
+
+    #[test]
+    fn compare_takes_a_junit_path() {
+        let a = Args::parse_from(["redliner", "compare", "a", "b", "--junit", "out/compare.xml"]);
+        assert!(matches!(a.command, Some(Command::Compare(ref c)) if c.junit == Some(PathBuf::from("out/compare.xml"))));
+        let a = Args::parse_from(["redliner", "compare", "a", "b"]);
+        assert!(matches!(a.command, Some(Command::Compare(ref c)) if c.junit.is_none()));
     }
 
     #[test]

@@ -196,29 +196,51 @@ pub fn write_manifest(dir: &Path, manifest: &RunManifest) -> std::io::Result<()>
 /// Writes SLO verdicts as a JUnit `<testsuite>` for CI ingestion
 /// (Go `writeJUnit`).
 pub fn write_junit(path: &Path, slos: &[SloResult], elapsed: Duration) -> std::io::Result<()> {
-    let failures = slos.iter().filter(|r| !r.passed).count();
+    let cases: Vec<JunitCase> = slos
+        .iter()
+        .map(|r| JunitCase {
+            name: r.name.clone(),
+            failure: (!r.passed)
+                .then(|| format!("{}: target {}, observed {}", r.name, r.target, r.observed)),
+        })
+        .collect();
+    write_junit_suite(path, "redliner.slos", &cases, elapsed)
+}
+
+/// One JUnit `<testcase>`; `failure` is the message of a failed one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JunitCase {
+    pub name: String,
+    pub failure: Option<String>,
+}
+
+/// Writes `cases` as one JUnit `<testsuite>` named `suite`.
+pub fn write_junit_suite(
+    path: &Path,
+    suite: &str,
+    cases: &[JunitCase],
+    elapsed: Duration,
+) -> std::io::Result<()> {
+    let failures = cases.iter().filter(|c| c.failure.is_some()).count();
     let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     xml.push_str(&format!(
-        "<testsuite name=\"redliner.slos\" tests=\"{}\" failures=\"{}\" time=\"{:.3}\">\n",
-        slos.len(),
+        "<testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" time=\"{:.3}\">\n",
+        esc(suite),
+        cases.len(),
         failures,
         elapsed.as_secs_f64()
     ));
-    for r in slos {
-        if r.passed {
-            xml.push_str(&format!(
+    for c in cases {
+        match &c.failure {
+            None => xml.push_str(&format!(
                 "  <testcase name=\"{}\" classname=\"redliner\"></testcase>\n",
-                esc(&r.name)
-            ));
-        } else {
-            let msg = esc(&format!(
-                "{}: target {}, observed {}",
-                r.name, r.target, r.observed
-            ));
-            xml.push_str(&format!(
-                "  <testcase name=\"{}\" classname=\"redliner\">\n    <failure message=\"{msg}\"></failure>\n  </testcase>\n",
-                esc(&r.name)
-            ));
+                esc(&c.name)
+            )),
+            Some(msg) => xml.push_str(&format!(
+                "  <testcase name=\"{}\" classname=\"redliner\">\n    <failure message=\"{}\"></failure>\n  </testcase>\n",
+                esc(&c.name),
+                esc(msg)
+            )),
         }
     }
     xml.push_str("</testsuite>\n");
@@ -577,6 +599,27 @@ mod tests {
         assert!(xml.contains("failures=\"1\""), "{xml}");
         assert_eq!(xml.matches("<failure").count(), 1);
         assert!(xml.contains("latency_p95"));
+    }
+
+    #[test]
+    fn junit_output_is_stable() {
+        let dir = tmp("junit-exact");
+        let path = dir.join("junit.xml");
+        let slos = vec![
+            SloResult { name: "ok".into(), target: "<= 1s".into(), observed: "1ms".into(), passed: true },
+            SloResult { name: "p<95>".into(), target: "<= 50ms".into(), observed: "\"200ms\"".into(), passed: false },
+        ];
+        write_junit(&path, &slos, Duration::from_millis(1500)).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <testsuite name=\"redliner.slos\" tests=\"2\" failures=\"1\" time=\"1.500\">\n\
+             \x20 <testcase name=\"ok\" classname=\"redliner\"></testcase>\n\
+             \x20 <testcase name=\"p&lt;95&gt;\" classname=\"redliner\">\n\
+             \x20   <failure message=\"p&lt;95&gt;: target &lt;= 50ms, observed &quot;200ms&quot;\"></failure>\n\
+             \x20 </testcase>\n\
+             </testsuite>\n"
+        );
     }
 
     #[test]

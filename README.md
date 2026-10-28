@@ -308,6 +308,12 @@ With `--max-regression`, a latency percentile that rises, or a throughput
 that falls, by more than that share of the baseline is a regression, and the
 command exits `1`. Without the flag it only reports, and exits `0`.
 
+`--junit <file>` also writes a JUnit report (suite `redliner.compare`). It
+has one test case per gated metric, named like `overall p95` or `GetUser p99`,
+and a regression fails its case with a message like
+`overall p95: 100ms -> 115ms (+15.0%, over the 10% limit)`. CI test
+reporters then show which metric regressed without anyone opening the log.
+
 - **Success rate** is shown in percentage points but not gated, because
   `slos.success_rate` already sets its floor on every run.
 - **Phases** (from `per_phase.json`) are matched by name, such as
@@ -338,7 +344,8 @@ and rate.
 
 # Fail when this build is >10% slower than a baseline run you keep
 # (e.g. restored from main's last run with actions/cache or download-artifact)
-- run: redliner compare baseline-report reports/latest --max-regression 10%
+- run: redliner compare baseline-report reports/latest --max-regression 10% --junit compare.xml
+  # upload compare.xml with your test reporter to see each regressed metric
 ```
 
 ## Run in K3s
