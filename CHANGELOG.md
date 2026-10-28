@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-27
+
 ### Added
 - **`redliner compare <baseline> <candidate>`** prints the change between two
   runs' reports: p50/p95/p99, throughput and success rate, overall, per load
@@ -133,6 +135,7 @@ Initial release — a from-scratch Rust port of an internal Go/Vegeta harness.
   violates one or more SLOs.
 - **Reproducibility** — a fixed `load.seed` reproduces pacing and sampling.
 
-[Unreleased]: https://github.com/danny-oneal/redliner/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/danny-oneal/redliner/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/danny-oneal/redliner/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/danny-oneal/redliner/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/danny-oneal/redliner/releases/tag/v0.1.0
