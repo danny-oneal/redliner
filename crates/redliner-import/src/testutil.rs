@@ -8,6 +8,17 @@ use serde_json::Value;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
+/// An introspection response for the schema in the plan's Task 2.
+pub const INTROSPECTION_JSON: &str = include_str!("../tests/fixtures/introspection.json");
+/// A server that refuses introspection.
+pub const INTROSPECTION_DISABLED_JSON: &str =
+    include_str!("../tests/fixtures/introspection-disabled.json");
+
+/// The parsed introspection fixture.
+pub fn fixture_schema() -> crate::graphql::schema::Schema {
+    crate::graphql::schema::parse(&serde_json::from_str(INTROSPECTION_JSON).unwrap()).unwrap()
+}
+
 /// Loads `yaml` with redliner's own config loader, builds its pools and
 /// renders every scenario's templates; panics with the YAML on any failure.
 pub fn assert_contract(yaml: &str) -> redliner::config::Config {
