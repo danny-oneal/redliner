@@ -127,27 +127,29 @@ jobs:
             target_env=$(echo "${{ matrix.target }}" | tr '-' '_')
             export "CC_${target_env}=musl-gcc"
           fi
-          cargo build --release --locked -p redliner --target ${{ matrix.target }}
+          cargo build --release --locked -p redliner -p redliner-import --target ${{ matrix.target }}
 
       - name: Smoke test
         if: ${{ !matrix.cross }}
         shell: bash
         run: |
-          bin="target/${{ matrix.target }}/release/redliner"
-          # The binary reports the version it's released as.
-          reported=$("$bin" --version)
-          echo "$reported"
-          [ "$reported" = "redliner ${{ needs.plan.outputs.version }}" ]
-          if [ "${{ matrix.musl }}" = "true" ]; then
-            file "$bin" | tee /dev/stderr | grep -q "statically linked\|static-pie linked"
-          fi
+          for name in redliner redliner-import; do
+            bin="target/${{ matrix.target }}/release/$name"
+            # Each binary reports the version it's released as.
+            reported=$("$bin" --version)
+            echo "$reported"
+            [ "$reported" = "$name ${{ needs.plan.outputs.version }}" ]
+            if [ "${{ matrix.musl }}" = "true" ]; then
+              file "$bin" | tee /dev/stderr | grep -q "statically linked\|static-pie linked"
+            fi
+          done
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           staging="redliner-${VERSION}-${{ matrix.target }}"
-          tar -czf "${staging}.tar.gz" -C "target/${{ matrix.target }}/release" redliner
+          tar -czf "${staging}.tar.gz" -C "target/${{ matrix.target }}/release" redliner redliner-import
           shasum -a 256 "${staging}.tar.gz" > "${staging}.tar.gz.sha256"
           echo "ASSET=${staging}.tar.gz" >> "$GITHUB_ENV"
 
@@ -156,7 +158,8 @@ jobs:
         shell: pwsh
         run: |
           $staging = "redliner-$env:VERSION-${{ matrix.target }}"
-          Compress-Archive -Path "target/${{ matrix.target }}/release/redliner.exe" -DestinationPath "$staging.zip"
+          $release = "target/${{ matrix.target }}/release"
+          Compress-Archive -Path "$release/redliner.exe", "$release/redliner-import.exe" -DestinationPath "$staging.zip"
           $hash = (Get-FileHash "$staging.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $staging.zip" | Out-File -FilePath "$staging.zip.sha256" -Encoding ascii -NoNewline
           "ASSET=$staging.zip" | Out-File -FilePath $env:GITHUB_ENV -Append

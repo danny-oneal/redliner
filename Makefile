@@ -21,6 +21,7 @@ lint:
 ## install the `redliner` binary into ~/.cargo/bin
 install:
 	cargo install --path crates/redliner --locked
+	cargo install --path crates/redliner-import --locked
 
 ## test scripts/install.sh against a fake local release
 test-install:

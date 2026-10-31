@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Release archives, `scripts/install.sh` and the Docker image now include
+  `redliner-import` next to `redliner`. The install script still installs
+  releases from before it shipped (`REDLINER_VERSION=v0.5.0`).
+
 ### Fixed
 - `redliner-import`:
   - A path parameter the spec doesn't declare (or declares in another case)

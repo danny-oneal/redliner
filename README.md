@@ -52,9 +52,10 @@ binary (`redliner`).
 
 ## Install
 
-**Prebuilt binary** (Linux x86_64/arm64, macOS). The script picks the release
+**Prebuilt binaries** (Linux x86_64/arm64, macOS). The script picks the release
 asset for your platform, checks it against the release's SHA-256 checksum, and
-installs it to `~/.local/bin`:
+installs `redliner` and [`redliner-import`](#scaffold-a-config-from-a-schema)
+to `~/.local/bin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/danny-oneal/redliner/main/scripts/install.sh | sh
@@ -69,14 +70,15 @@ distro and in `scratch`/distroless images. Windows builds are attached to each
 **From source** needs a **Rust toolchain ≥ 1.88** ([rustup](https://rustup.rs)).
 
 ```bash
-# From a local checkout (also: `make install`):
+# From a local checkout (also: `make install`, which installs both):
 cargo install --path crates/redliner --locked
+cargo install --path crates/redliner-import --locked
 
 # Or straight from GitHub:
-cargo install --git https://github.com/danny-oneal/redliner redliner --locked
+cargo install --git https://github.com/danny-oneal/redliner redliner redliner-import --locked
 ```
 
-Both drop a `redliner` binary in `~/.cargo/bin`. To run from source without
+Both drop the binaries in `~/.cargo/bin`. To run from source without
 installing, use `cargo run -p redliner -- <args>`.
 
 ## Quick start
@@ -146,12 +148,13 @@ config (YAML) ─▶ build pools ─▶ harvest probe ─▶ weighted mix + enco
                          collector ─▶ SLO gate ─▶ report dir + exit code
 ```
 
-The workspace has two crates:
+The workspace has three crates:
 
 | crate        | role |
 | ------------ | ---- |
 | **`volley`** | protocol-agnostic async load engine: `Target`/`AttackResult`/`Metrics`, the `Pacer` and `Targeter` traits, pacers, and the tokio `Attacker` that fires at a paced rate over reqwest. Depends on nothing in `redliner`. |
 | **`redliner`** | the binary: YAML config model + validation, CLI overrides, GraphQL/REST encoders, data pools + harvest, app-layer checks, SLO gate, and the report directory. |
+| **`redliner-import`** | a separate binary that drafts a config from GraphQL introspection or an OpenAPI/Swagger document. The YAML it writes is its only link to `redliner`. |
 
 ## CLI
 
@@ -243,12 +246,11 @@ locally and in CI.
 `redliner-import` drafts a config from what the service already describes:
 one scenario per GraphQL Query field (via live introspection), or one per
 OpenAPI 3.x / Swagger 2.0 operation. It only writes YAML; it never fires load.
-It ships in this workspace but not in the release archives yet, so install it
-from source:
+From v0.5.1 it ships next to `redliner` in every release archive, the
+[install script](#install) and the Docker image
+(`docker run --entrypoint redliner-import <image> …`):
 
 ```bash
-cargo install --path crates/redliner-import --locked
-
 redliner-import graphql https://staging.example.com/graphql -o redliner.yaml
 redliner-import openapi ./openapi.yaml --base-url https://staging.example.com -o redliner.yaml
 redliner --config redliner.yaml --validate
