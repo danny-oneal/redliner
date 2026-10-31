@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE, LOCATION};
 use serde_json::Value;
 
 use crate::ImportError;
@@ -18,6 +18,9 @@ pub struct FetchOpts {
 
 pub struct Fetcher {
     client: reqwest::Client,
+    /// For POSTs: never follows redirects, since following a 301/302 turns
+    /// the POST into a GET.
+    post_client: reqwest::Client,
     headers: HeaderMap,
 }
 
@@ -43,12 +46,15 @@ impl Fetcher {
             value.set_sensitive(true);
             headers.insert(AUTHORIZATION, value);
         }
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .danger_accept_invalid_certs(opts.insecure)
-            .build()
-            .map_err(|source| ImportError::Http { url: "http client".into(), source })?;
-        Ok(Fetcher { client, headers })
+        let builder = || {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .danger_accept_invalid_certs(opts.insecure)
+        };
+        let http = |source: reqwest::Error| ImportError::Http { url: "http client".into(), source };
+        let client = builder().build().map_err(http)?;
+        let post_client = builder().redirect(reqwest::redirect::Policy::none()).build().map_err(http)?;
+        Ok(Fetcher { client, post_client, headers })
     }
 
     /// POSTs `body` as JSON and returns the JSON reply. A non-2xx reply is
@@ -56,12 +62,15 @@ impl Fetcher {
     /// introspection that way); any other non-2xx is its status.
     pub async fn post_json(&self, url: &str, body: &Value) -> Result<Value, ImportError> {
         let req = self
-            .client
+            .post_client
             .post(url)
             .headers(self.headers.clone())
             .header(CONTENT_TYPE, "application/json")
             .body(body.to_string());
-        let (code, bytes) = self.send(url, req).await?;
+        let (code, location, bytes) = self.send(url, req).await?;
+        if let (300..=399, Some(location)) = (code, location) {
+            return Err(ImportError::Redirect { url: url.to_string(), location });
+        }
         let ok = (200..300).contains(&code);
         match serde_json::from_slice::<Value>(&bytes) {
             Ok(v) if ok || v.get("errors").is_some() => Ok(v),
@@ -77,7 +86,7 @@ impl Fetcher {
     /// GETs `url` as text; a non-2xx reply is its status.
     pub async fn get_text(&self, url: &str) -> Result<String, ImportError> {
         let req = self.client.get(url).headers(self.headers.clone());
-        let (code, bytes) = self.send(url, req).await?;
+        let (code, _, bytes) = self.send(url, req).await?;
         if !(200..300).contains(&code) {
             return Err(ImportError::Status { url: url.to_string(), code });
         }
@@ -91,17 +100,23 @@ impl Fetcher {
         &self,
         url: &str,
         req: reqwest::RequestBuilder,
-    ) -> Result<(u16, Vec<u8>), ImportError> {
+    ) -> Result<(u16, Option<String>, Vec<u8>), ImportError> {
         let resp = req
             .send()
             .await
             .map_err(|source| ImportError::Http { url: url.to_string(), source })?;
         let code = resp.status().as_u16();
+        // Absolute, so a relative Location still names a usable URL.
+        let location = resp
+            .headers()
+            .get(LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(|l| resp.url().join(l).map_or_else(|_| l.to_string(), |u| u.to_string()));
         let bytes = resp
             .bytes()
             .await
             .map_err(|source| ImportError::Http { url: url.to_string(), source })?;
-        Ok((code, bytes.to_vec()))
+        Ok((code, location, bytes.to_vec()))
     }
 }
 

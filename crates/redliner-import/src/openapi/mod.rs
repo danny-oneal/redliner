@@ -42,9 +42,17 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
     }
 
     let mut commented = 0;
+    // Notes for skipped paths and operations, repeated in the error if nothing is left.
+    let mut skipped: Vec<String> = Vec::new();
     for (path, item) in doc.get("paths").and_then(Value::as_object).into_iter().flatten() {
         let Some(item) = resolve(doc, item) else {
-            d.notes.push(format!("{path}: skipped — its path item uses an unresolvable $ref"));
+            let r = item.get("$ref").and_then(Value::as_str).unwrap_or_default();
+            let note = match r.starts_with('#') {
+                true => format!("{path}: skipped — its path item uses an unresolvable $ref"),
+                false => format!("{path}: skipped — its path item uses an external $ref ({r})"),
+            };
+            skipped.push(note.clone());
+            d.notes.push(note);
             continue;
         };
         for method in METHODS {
@@ -53,7 +61,9 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
             let ps = match params(doc, ver, item, op) {
                 Ok(ps) => ps,
                 Err(reason) => {
-                    d.notes.push(format!("{upper} {path}: skipped — {reason}"));
+                    let note = format!("{upper} {path}: skipped — {reason}");
+                    skipped.push(note.clone());
+                    d.notes.push(note);
                     continue;
                 }
             };
@@ -74,6 +84,11 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
                     d.notes.push(format!("{name}: cookie parameter {} skipped", p.name));
                     continue;
                 }
+                if p.location == Location::Header
+                    && (p.name.eq_ignore_ascii_case("accept") || p.name.eq_ignore_ascii_case("content-type"))
+                {
+                    continue; // OpenAPI: these header parameters SHALL be ignored
+                }
                 if p.location == Location::Header && p.name.eq_ignore_ascii_case("authorization") {
                     d.notes.push(format!(
                         "{name}: Authorization header parameter skipped; set target.auth or pass --bearer-env"
@@ -90,6 +105,18 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
                     Location::Query => query.push(format!("{}={placeholder}", p.name)),
                     Location::Header => headers.push((p.name, placeholder)),
                     Location::Cookie => {}
+                }
+            }
+            // A `{name}` the spec doesn't declare (or declares in another case)
+            // still needs a value, or the request goes out with a literal `{name}`.
+            for n in template_names(path) {
+                if !path_pools.iter().any(|(p, _)| p == n) {
+                    let todo = Some("path parameter the spec does not declare".to_string());
+                    let pool = d.add_pool(
+                        &format!("{name}_{n}"),
+                        PoolDraft { values: vec![Value::String("TODO".into())], todo },
+                    );
+                    path_pools.push((n.to_string(), format!("{{{{{pool}}}}}")));
                 }
             }
             let mut url_path = fill_path(path, &path_pools);
@@ -134,7 +161,17 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
 
     if d.scenarios.iter().all(|s| s.commented.is_some()) {
         return Err(ImportError::NoOperations(match commented {
-            0 => "the spec has no usable operations".into(),
+            0 => match skipped.first() {
+                None => "the spec has no usable operations".into(),
+                Some(first) => format!(
+                    "the spec has no usable operations; {} skipped, e.g. {first}{}",
+                    skipped.len(),
+                    match skipped.iter().any(|n| n.contains("external $ref")) {
+                        true => "; bundle its external $refs into one file first (e.g. `redocly bundle`)",
+                        false => "",
+                    }
+                ),
+            },
             1 => "its only operation changes state; pass --include-unsafe to scaffold it".into(),
             n => format!("all {n} operations change state; pass --include-unsafe to scaffold them"),
         }));
@@ -144,6 +181,11 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
 
 /// `template` with each `{param}` that has a pool replaced by its
 /// placeholder, in one pass so a replacement is never re-scanned.
+/// The `{name}`s in a path template, in order.
+fn template_names(template: &str) -> Vec<&str> {
+    template.split('{').skip(1).filter_map(|s| s.split_once('}').map(|(n, _)| n)).collect()
+}
+
 fn fill_path(template: &str, pools: &[(String, String)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
@@ -323,5 +365,48 @@ mod tests {
         let names: Vec<&str> = d.scenarios.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["GET /a", "GET /b"]);
         assert_contract(&render(&d));
+    }
+
+    #[test]
+    fn undeclared_path_parameters_get_a_todo_pool() {
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {
+            "/pets/{petId}/toys/{toyId}": {"get": {"operationId": "getToy", "parameters": [
+                {"name": "toyId", "in": "path", "required": true, "schema": {"type": "integer", "example": 7}}
+            ]}}
+        }});
+        let d = draft(&doc, &opts(false)).unwrap();
+        assert_eq!(rest(&d, "getToy").0, "/pets/{{getToy_petId}}/toys/{{getToy_toyId}}");
+        assert_eq!(
+            d.pools["getToy_petId"],
+            PoolDraft { values: vec![json!("TODO")], todo: Some("path parameter the spec does not declare".into()) }
+        );
+        assert_contract(&render(&d));
+    }
+
+    #[test]
+    fn a_spec_of_external_path_items_says_to_bundle_it() {
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {
+            "/pets": {"$ref": "paths/pets.yaml"}, "/toys": {"$ref": "paths/toys.yaml"}
+        }});
+        let Err(ImportError::NoOperations(msg)) = draft(&doc, &opts(false)) else { panic!("expected NoOperations") };
+        assert!(msg.contains("2 skipped"), "{msg}");
+        assert!(msg.contains("/pets: skipped — its path item uses an external $ref (paths/pets.yaml)"), "{msg}");
+        assert!(msg.contains("bundle"), "{msg}");
+    }
+
+    #[test]
+    fn accept_and_content_type_header_parameters_are_ignored() {
+        // OpenAPI 3: header parameters named Accept or Content-Type SHALL be ignored.
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {"/a": {"get": {
+            "operationId": "a", "parameters": [
+                {"name": "Accept", "in": "header", "required": true, "schema": {"type": "string"}},
+                {"name": "content-type", "in": "header", "required": true, "schema": {"type": "string"}},
+                {"name": "X-Trace", "in": "header", "required": true, "schema": {"type": "string", "example": "t"}}
+            ]
+        }}}});
+        let d = draft(&doc, &opts(false)).unwrap();
+        let names: Vec<&str> = rest(&d, "a").1.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(names, ["X-Trace"]);
+        assert_eq!(d.pools.keys().collect::<Vec<_>>(), ["a_X_Trace"]);
     }
 }

@@ -283,4 +283,16 @@ mod tests {
         let r = fetch_schema(&f, &format!("{}/nope", m.url)).await;
         assert!(matches!(r, Err(ImportError::Status { code: 404, .. })), "{r:?}");
     }
+
+    #[tokio::test]
+    async fn a_redirect_is_named_not_reported_as_disabled_introspection() {
+        // Following a 301 turns the POST into a GET, which a GraphQL server
+        // rejects with `errors`; that read as "introspection is disabled".
+        let target = spawn_mock(400, "application/json", INTROSPECTION_DISABLED_JSON.to_string()).await;
+        let to = format!("{}/graphql", target.url);
+        let m = crate::testutil::spawn_mock_with(301, "text/plain", String::new(), format!("Location: {to}\r\n")).await;
+        let f = Fetcher::new(&no_auth()).unwrap();
+        let r = fetch_schema(&f, &format!("{}/graphql", m.url)).await;
+        assert!(matches!(&r, Err(ImportError::Redirect { location, .. }) if *location == to), "{r:?}");
+    }
 }
