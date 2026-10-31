@@ -1,0 +1,11 @@
+{"swagger": "2.0", "info": {"title": "Pets", "version": "1"},
+ "host": "pets.example.com", "basePath": "/api", "schemes": ["https", "http"],
+ "paths": {
+  "/pets": {
+   "get": {"operationId": "findPets", "parameters": [
+     {"name": "status", "in": "query", "required": true, "type": "string", "enum": ["available", "sold"]}]},
+   "post": {"operationId": "addPet", "parameters": [
+     {"name": "body", "in": "body", "required": true, "schema": {"example": {"name": "Rex"}}}]}},
+  "/pets/{petId}": {
+   "get": {"operationId": "getPet", "parameters": [
+     {"name": "petId", "in": "path", "required": true, "type": "integer", "x-example": 7}]}}}}

@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `redliner-import`, a separate tool that scaffolds a Redliner config from a
+  live GraphQL endpoint (introspection) or an OpenAPI 3.x / Swagger 2.0
+  document. State-changing operations are commented out unless
+  `--include-unsafe`; credentials used to fetch the schema are never written
+  to the draft. Install from source: `cargo install --path crates/redliner-import`.
+
 ## [0.4.1] - 2026-10-27
 
 ### Security

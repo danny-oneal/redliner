@@ -1,0 +1,32 @@
+[package]
+name = "redliner-import"
+version.workspace = true
+edition = "2021"
+rust-version = "1.88"
+description = "Scaffold a Redliner load-test config from a GraphQL schema or an OpenAPI/Swagger document"
+license = "MIT"
+repository = "https://github.com/danny-oneal/redliner"
+homepage = "https://github.com/danny-oneal/redliner"
+readme = "../../README.md"
+keywords = ["load-testing", "graphql", "openapi", "swagger", "scaffold"]
+categories = ["command-line-utilities", "development-tools::testing"]
+
+[[bin]]
+name = "redliner-import"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5.61", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde_json = "1.0.154"
+serde_yaml_ng = "0.10.0"
+thiserror = "2.0.20"
+tokio = { version = "1.53.3", features = ["rt", "macros"] }
+
+[dev-dependencies]
+# The contract: every draft must load and render under redliner itself.
+# Path-only, so `cargo package` strips it; the binary never links redliner.
+redliner = { path = "../redliner" }
+rand = "0.9.5"
+rand_chacha = "0.9.0"
+tokio = { version = "1.53.3", features = ["rt", "macros", "net", "io-util"] }

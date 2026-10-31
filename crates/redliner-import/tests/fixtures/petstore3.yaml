@@ -1,0 +1,45 @@
+openapi: 3.0.3
+info: {title: Pets, version: "1"}
+servers:
+  - url: "https://{env}.pets.example.com/v1"
+    variables: {env: {default: api}}
+security: [{bearer: []}]
+components:
+  securitySchemes: {bearer: {type: http, scheme: bearer}}
+  parameters:
+    Limit: {name: limit, in: query, required: true, schema: {type: integer, default: 20}}
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - {name: status, in: query, schema: {type: string}}
+    post:
+      operationId: createPet
+      requestBody:
+        content:
+          application/json:
+            example: {name: Rex, kind: dog}
+  /pets/{petId}:
+    parameters:
+      - {name: petId, in: path, required: true, schema: {type: integer}, example: 42}
+    get:
+      operationId: getPetById
+      parameters:
+        - {name: X-Request-Id, in: header, required: true, schema: {type: string, format: uuid}}
+        - {name: Authorization, in: header, required: true, schema: {type: string}}
+    delete:
+      operationId: deletePet
+  /pets/{petId}/photos:
+    get:
+      parameters:
+        - {name: petId, in: path, required: true, schema: {type: integer}}
+        - {name: size, in: query, required: true, schema: {type: string, enum: [small, large]}}
+  /legacy:
+    get:
+      operationId: legacy
+      parameters:
+        - $ref: "other.yaml#/components/parameters/X"
+    options:
+      operationId: legacyOptions

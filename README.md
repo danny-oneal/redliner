@@ -238,6 +238,43 @@ native type (`id: "{{ids}}"` stays an integer); an embedded placeholder
 pools) resolve relative to the config file, so a config behaves the same
 locally and in CI.
 
+## Scaffold a config from a schema
+
+`redliner-import` drafts a config from what the service already describes:
+one scenario per GraphQL Query field (via live introspection), or one per
+OpenAPI 3.x / Swagger 2.0 operation. It only writes YAML; it never fires load.
+It ships in this workspace but not in the release archives yet, so install it
+from source:
+
+```bash
+cargo install --path crates/redliner-import --locked
+
+redliner-import graphql https://staging.example.com/graphql -o redliner.yaml
+redliner-import openapi ./openapi.yaml --base-url https://staging.example.com -o redliner.yaml
+redliner --config redliner.yaml --validate
+```
+
+The draft is a starting point to review, not a finished benchmark:
+
+- **Placeholders are marked.** Every required parameter or argument gets its
+  own list pool, filled from the spec's `example`/`default`/`enum` where one
+  exists; otherwise it
+  holds a typed placeholder with a `# TODO: real values` comment. Replace
+  those (or fill them with `data.harvest`).
+- **Safe by default.** OpenAPI `POST`/`PUT`/`PATCH`/`DELETE` operations are
+  written commented out; pass `--include-unsafe` to emit them live. GraphQL
+  mutations are listed in the notes, not scaffolded.
+- **Secrets stay out of the file.** `-H "Name: value"` and `--bearer-env VAR`
+  authenticate the schema fetch; the draft records only the header names (in a
+  comment) and `auth.token_env: VAR`, never a value.
+- **Defaults** are a constant 10 rps for 30s, with suggested SLOs commented
+  out. `-k` accepts invalid certificates and sets `insecure_tls`. `-o` refuses
+  to overwrite an existing file without `--force`. Errors exit `2`.
+
+Introspection is often disabled in production; point the GraphQL importer at
+staging. A spec loaded from a URL resolves relative `servers` against that URL;
+a local spec with relative servers needs `--base-url`.
+
 ## Production-log replay
 
 Instead of a synthetic profile, replay what production actually saw. Give each
