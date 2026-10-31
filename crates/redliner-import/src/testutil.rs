@@ -1,10 +1,70 @@
 //! Test helpers: the contract every draft must meet.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use serde_json::Value;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+
+/// An in-process HTTP server answering every request with one response.
+pub struct Mock {
+    /// `http://127.0.0.1:PORT`, no trailing slash.
+    pub url: String,
+    /// Each raw request received: request line, headers and body.
+    pub requests: Arc<Mutex<Vec<String>>>,
+}
+
+/// Serves `status` with `body` to every request on any path, recording each
+/// request in full (headers, then a `Content-Length` body).
+pub async fn spawn_mock(status: u16, content_type: &'static str, body: String) -> Mock {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let seen = requests.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else { break };
+            let (seen, body) = (seen.clone(), body.clone());
+            tokio::spawn(async move {
+                let mut data = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    data.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&data);
+                    if let Some(end) = text.find("\r\n\r\n") {
+                        let len = text[..end]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if data.len() >= end + 4 + len {
+                            break;
+                        }
+                    }
+                }
+                seen.lock().unwrap().push(String::from_utf8_lossy(&data).into_owned());
+                let resp = format!(
+                    "HTTP/1.1 {status} Mock\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    Mock { url, requests }
+}
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
