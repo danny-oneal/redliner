@@ -13,6 +13,7 @@ make validate CONFIG=configs/rest-example.yaml   # parse + validate a config, fi
 make run CONFIG=configs/rest-example.yaml
 
 cargo test -p redliner-volley                      # one crate
+cargo test -p redliner-import                      # the config importer
 cargo test -p redliner --test e2e                 # one integration test file
 cargo test -p redliner --lib replay::schedule     # unit tests under a module path
 cargo test -p redliner --test e2e <name> -- --exact --nocapture
@@ -24,7 +25,7 @@ CI runs `make lint`, `make test`, `cargo +1.88 check` (MSRV), `cargo package --w
 
 ## Architecture
 
-Two workspace crates with a one-way dependency: `redliner` → `volley`.
+Three workspace crates. `redliner` → `volley` is a one-way dependency; `redliner-import` depends on neither at runtime (only on `redliner` as a test dev-dependency).
 
 - **`volley`** — protocol- and config-agnostic engine. `Attacker::attack(targeter, pacer, duration, phase)` returns an mpsc receiver of `AttackResult`s; in-flight requests are capped by a semaphore at `max_workers`. The two seams are the `Pacer` trait (`pace(elapsed, hits) -> (wait, stop)`) and the `Targeter` trait (`target(seq, &mut Target)`). Never add config, CLI, or protocol knowledge here.
 - **`redliner`** — `main.rs` is a shim; everything is in the lib. The `compare` subcommand (`compare.rs`, dispatched at the top of `run_with_interrupt`) only reads two finished report dirs; it never fires traffic. `run.rs::run_inner` is the pipeline and the best entry point for understanding the flow:
@@ -35,6 +36,7 @@ Two workspace crates with a one-way dependency: `redliner` → `volley`.
   5. A report dir and initial `run_manifest.json` are written **before traffic**, so aborted runs leave a trail.
   6. Each result goes through `checks::Checker` (reclassifies app-layer failures, e.g. a 200 with GraphQL `errors`) into `report::Collector`.
   7. `slo::evaluate` → reports/JUnit → `Exit` code: `0` ok, `1` SLO failed (or replay dropped hits — the synthetic `replay_delivery` SLO), `2` config/runtime error, `130` interrupted by Ctrl-C (`run_with_interrupt` stops firing, drains in-flight hits, and reports the partial run with `aborted: true`).
+- **`redliner-import`** — a separate binary that drafts a config from GraphQL introspection (`graphql/`) or an OpenAPI/Swagger document (`openapi/`, walked as `serde_json::Value`) into a `draft::Draft`, then `draft::render` writes templated YAML. The YAML is its only interface to `redliner`; never link `redliner` at runtime. Its contract tests (`testutil::assert_contract`) load and render every draft with `redliner`'s own config loader. Never write a credential value into a draft (only header names and `auth.token_env`).
 
 Invariants worth knowing before you change things:
 
