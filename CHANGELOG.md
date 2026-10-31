@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-31
+
 ### Added
 - `redliner-import`, a separate tool that scaffolds a Redliner config from a
   live GraphQL endpoint (introspection) or an OpenAPI 3.x / Swagger 2.0
@@ -196,7 +198,8 @@ Initial release — a from-scratch Rust port of an internal Go/Vegeta harness.
   violates one or more SLOs.
 - **Reproducibility** — a fixed `load.seed` reproduces pacing and sampling.
 
-[Unreleased]: https://github.com/danny-oneal/redliner/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/danny-oneal/redliner/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/danny-oneal/redliner/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/danny-oneal/redliner/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/danny-oneal/redliner/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/danny-oneal/redliner/compare/v0.2.0...v0.3.0
