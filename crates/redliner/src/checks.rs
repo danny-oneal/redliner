@@ -144,6 +144,12 @@ mod tests {
         );
         assert_eq!(v, [true, true, false, false, false]);
         assert_eq!(default.accepted(), 2);
+
+        // A body that failed mid-read keeps its real status but carries an
+        // error: never a success, whatever the status rule.
+        let truncated = res(200, b"", Some("error reading a body from connection"));
+        assert!(!checker(None, false).accepts(&truncated));
+        assert!(!checker(Some(&[200]), false).accepts(&truncated));
     }
 
     fn res(code: u16, body: &[u8], err: Option<&str>) -> AttackResult {

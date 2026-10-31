@@ -181,18 +181,19 @@ mod tests {
     fn add_with_success_takes_the_callers_verdict() {
         let ok = results().remove(0); // 200, no error
         let mut m = Metrics::new();
-        // A 404 the caller accepted, a 200 it rejected, and a 404 under the
-        // default rule (2xx/3xx only).
+        // Two 404s the caller accepted, a 200 it rejected, and a 404 under
+        // the default rule (2xx/3xx only). The default rule alone would count
+        // one success of four.
+        m.add_with_success(&AttackResult { code: 404, ..ok.clone() }, true);
         m.add_with_success(&AttackResult { code: 404, ..ok.clone() }, true);
         m.add_with_success(&ok, false);
         m.add(&AttackResult { code: 404, ..ok.clone() });
         m.close();
 
-        assert_eq!(m.requests, 3);
-        assert_eq!(m.success, 1.0 / 3.0);
-        assert!(m.throughput > 0.0);
+        assert_eq!(m.requests, 4);
+        assert_eq!(m.success, 0.5);
         // The codes are recorded as the server sent them.
-        assert_eq!(m.status_codes[&404], 2);
+        assert_eq!(m.status_codes[&404], 3);
         assert_eq!(m.status_codes[&200], 1);
     }
 

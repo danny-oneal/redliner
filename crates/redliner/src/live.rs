@@ -128,10 +128,13 @@ mod tests {
         let mut live = Live::new(Duration::from_secs(10));
         live.begin();
         let t0 = live.start;
-        live.add(&res(404, 10), true); // an allowed 404 is a success
+        // Two allowed 404s and one rejected 200: the old status rule would
+        // score this 33.33% ok, 2 failed.
+        live.add(&res(404, 10), true);
+        live.add(&res(404, 10), true);
         live.add(&res(200, 10), false);
         let line = live.line("steady", t0 + Duration::from_secs(1));
-        assert!(line.contains("50.00% ok") && line.contains("1 failed"), "{line}");
+        assert!(line.contains("66.67% ok") && line.contains("1 failed"), "{line}");
     }
 
     #[tokio::test]

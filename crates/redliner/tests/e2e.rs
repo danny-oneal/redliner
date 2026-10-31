@@ -276,6 +276,9 @@ async fn e2e_graphql_errors_fail_slo() {
     let cfg = write_cfg(&dir, &mock.url, "slos:\n  success_rate: 0.99\n");
     assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap()])).await, Exit::SloFailed);
     assert!(mock.hits.load(Ordering::SeqCst) > 10);
+    // The success rate must reflect the reclassification too, not only the exit
+    // code (the verdict is taken after the checker has applied).
+    assert_eq!(read_metrics(&dir)["success"], 0.0);
 }
 
 #[tokio::test]
@@ -413,6 +416,33 @@ async fn e2e_replay_fires_each_matched_event_in_order() {
     assert_eq!(operation_names(&mock), ["a", "b", "a", "b", "a"]);
     let manifest = read_manifest(&dir);
     assert_eq!(manifest["replay"]["unmatched"], 1, "manifest: {manifest:#}");
+}
+
+#[tokio::test]
+async fn e2e_replay_allowed_non_2xx_status_counts_as_success() {
+    let (origin, hits) = spawn_404_mock().await;
+    let dir = tempdir("replay-allow404");
+    let (cfg, _) = write_replay(&dir, &format!("{origin}/graphql"));
+    let mut yaml = std::fs::read_to_string(&cfg).unwrap();
+    yaml.push_str("checks:\n  status: [404]\nslos:\n  success_rate: 0.99\n");
+    std::fs::write(&cfg, yaml).unwrap();
+    let extra = ["--out", dir.to_str().unwrap(), "--live-stats", "0s"];
+    assert_eq!(run(args(&cfg, &extra)).await, Exit::Ok);
+    assert_eq!(hits.load(Ordering::SeqCst), 5);
+    assert_eq!(read_metrics(&dir)["success"], 1.0);
+}
+
+#[tokio::test]
+async fn e2e_replay_graphql_errors_count_as_failures() {
+    let mock = spawn_error_mock().await;
+    let dir = tempdir("replay-gqlerr");
+    let (cfg, _) = write_replay(&dir, &mock.url);
+    let mut yaml = std::fs::read_to_string(&cfg).unwrap();
+    yaml.push_str("slos:\n  success_rate: 0.99\n");
+    std::fs::write(&cfg, yaml).unwrap();
+    let extra = ["--out", dir.to_str().unwrap(), "--live-stats", "0s"];
+    assert_eq!(run(args(&cfg, &extra)).await, Exit::SloFailed);
+    assert_eq!(read_metrics(&dir)["success"], 0.0);
 }
 
 #[tokio::test]
@@ -693,6 +723,9 @@ fn dead_target_args(out: &str, duration: &str) -> Args {
     ])
 }
 
+fn read_metrics(base: &std::path::Path) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(newest_report(base).join("metrics.json")).unwrap()).unwrap()
+}
 fn has_slo(manifest: &serde_json::Value, name: &str) -> bool {
     manifest["slo_results"]
         .as_array()
@@ -794,9 +827,7 @@ async fn e2e_allowed_non_2xx_status_counts_as_success() {
     assert_eq!(run(args(&cfg, &extra)).await, Exit::Ok);
     assert!(hits.load(Ordering::SeqCst) > 10);
 
-    let report = newest_report(&dir);
-    let metrics: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(report.join("metrics.json")).unwrap()).unwrap();
+    let metrics = read_metrics(&dir);
     assert_eq!(metrics["success"], 1.0, "{metrics}");
     assert!(metrics["throughput"].as_f64().unwrap() > 5.0, "{metrics}");
     // The status codes stay what the server said.
