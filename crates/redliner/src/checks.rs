@@ -38,21 +38,28 @@ impl Checker {
         }
     }
 
-    /// How many applied results succeeded by this checker's definition: no
-    /// error, and a status in `checks.status` (2xx/3xx when that is empty).
+    /// How many applied results [`Checker::accepts`] counted.
     pub fn accepted(&self) -> u64 {
         self.accepted.load(Ordering::Relaxed)
+    }
+
+    /// Whether `r` succeeded: no error, and a status in `checks.status`
+    /// (2xx/3xx when that is empty). The one definition of success; the
+    /// metrics, the SLO gate and the reports all take it from here. Call it
+    /// after [`Checker::apply`] has reclassified `r`.
+    pub fn accepts(&self, r: &AttackResult) -> bool {
+        let ok_status = match &self.statuses {
+            Some(statuses) => statuses.contains(&r.code),
+            None => (200..400).contains(&r.code),
+        };
+        ok_status && r.error.as_deref().is_none_or(str::is_empty)
     }
 
     /// Mutates `r` in place; returns `true` if the result was reclassified.
     /// Tallies the result towards [`Checker::accepted`].
     pub fn apply(&self, r: &mut AttackResult) -> bool {
         let reclassified = self.reclassify(r);
-        let ok_status = match &self.statuses {
-            Some(statuses) => statuses.contains(&r.code),
-            None => (200..400).contains(&r.code),
-        };
-        if ok_status && r.error.as_deref().is_none_or(str::is_empty) {
+        if self.accepts(r) {
             self.accepted.fetch_add(1, Ordering::Relaxed);
         }
         reclassified
@@ -105,6 +112,44 @@ mod tests {
             graphql_errors,
             accepted: AtomicU64::new(0),
         }
+    }
+
+    #[test]
+    fn accepts_is_the_success_verdict_and_matches_the_tally() {
+        let verdicts = |c: &Checker, rs: Vec<AttackResult>| -> Vec<bool> {
+            rs.into_iter()
+                .map(|mut r| {
+                    c.apply(&mut r);
+                    c.accepts(&r)
+                })
+                .collect()
+        };
+        // checks.status [404]: the allowed 404 succeeds; a 200 is outside the set.
+        let allow_404 = checker(Some(&[404]), false);
+        let v = verdicts(&allow_404, vec![res(404, b"", None), res(200, b"", None)]);
+        assert_eq!(v, [true, false]);
+        assert_eq!(allow_404.accepted(), 1);
+
+        // Default: 2xx/3xx without an error or a GraphQL `errors` payload.
+        let default = checker(None, true);
+        let v = verdicts(
+            &default,
+            vec![
+                res(200, b"{}", None),
+                res(302, b"", None),
+                res(500, b"", None),
+                res(0, b"", Some("connection refused")),
+                res(200, br#"{"errors":[{"message":"boom"}]}"#, None),
+            ],
+        );
+        assert_eq!(v, [true, true, false, false, false]);
+        assert_eq!(default.accepted(), 2);
+
+        // A body that failed mid-read keeps its real status but carries an
+        // error: never a success, whatever the status rule.
+        let truncated = res(200, b"", Some("error reading a body from connection"));
+        assert!(!checker(None, false).accepts(&truncated));
+        assert!(!checker(Some(&[200]), false).accepts(&truncated));
     }
 
     fn res(code: u16, body: &[u8], err: Option<&str>) -> AttackResult {

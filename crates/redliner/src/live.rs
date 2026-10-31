@@ -47,10 +47,10 @@ impl Live {
         });
     }
 
-    /// Counts one (already checked) result.
-    pub fn add(&mut self, r: &AttackResult) {
+    /// Counts one (already checked) result; `ok` is the checker's verdict.
+    pub fn add(&mut self, r: &AttackResult, ok: bool) {
         self.total += 1;
-        self.window.add(r);
+        self.window.add_with_success(r, ok);
     }
 
     /// The next result from `rx`, printing a progress line whenever the
@@ -124,6 +124,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn line_counts_the_callers_verdict_not_the_status_code() {
+        let mut live = Live::new(Duration::from_secs(10));
+        live.begin();
+        let t0 = live.start;
+        // Two allowed 404s and one rejected 200: the old status rule would
+        // score this 33.33% ok, 2 failed.
+        live.add(&res(404, 10), true);
+        live.add(&res(404, 10), true);
+        live.add(&res(200, 10), false);
+        let line = live.line("steady", t0 + Duration::from_secs(1));
+        assert!(line.contains("66.67% ok") && line.contains("1 failed"), "{line}");
+    }
+
+    #[tokio::test]
     async fn line_reports_the_window_and_the_running_total() {
         let mut live = Live::new(Duration::from_secs(10));
         live.begin();
@@ -131,7 +145,7 @@ mod tests {
         let batch = [res(200, 10), res(200, 10), res(500, 10)];
         let mut want = Metrics::new();
         for r in &batch {
-            live.add(r);
+            live.add(r, (200..400).contains(&r.code));
             want.add(r);
         }
         want.close();
@@ -152,10 +166,10 @@ mod tests {
         live.begin();
         let t0 = live.start;
         for _ in 0..3 {
-            live.add(&res(500, 10));
+            live.add(&res(500, 10), false);
         }
         live.line("steady", t0 + Duration::from_secs(1));
-        live.add(&res(200, 10));
+        live.add(&res(200, 10), true);
 
         let line = live.line("peak", t0 + Duration::from_secs(3));
         assert!(

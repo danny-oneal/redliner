@@ -115,21 +115,23 @@ impl Collector {
     }
 
     /// Records one result into overall, the histogram, the named operation
-    /// (when attributable), the phase, and the raw stream (Go `Add`).
-    pub fn add(&mut self, r: &AttackResult, phase: &str, op: Option<&str>) {
+    /// (when attributable), the phase, and the raw stream (Go `Add`). `ok` is
+    /// the checker's verdict ([`crate::checks::Checker::accepts`]) and decides
+    /// what counts as a success in every one of those views.
+    pub fn add(&mut self, r: &AttackResult, ok: bool, phase: &str, op: Option<&str>) {
         if let Some(w) = self.raw.as_mut() {
             if let Ok(line) = serde_json::to_string(&RawRecord::from(r)) {
                 let _ = writeln!(w, "{line}");
             }
         }
-        self.overall.add(r);
+        self.overall.add_with_success(r, ok);
         self.hist.add(r.latency);
         if let Some(op) = op {
             if !op.is_empty() {
-                self.per_op.entry(op.to_string()).or_default().add(r);
+                self.per_op.entry(op.to_string()).or_default().add_with_success(r, ok);
             }
         }
-        self.per_phase.entry(phase.to_string()).or_default().add(r);
+        self.per_phase.entry(phase.to_string()).or_default().add_with_success(r, ok);
     }
 
     pub fn close(&mut self) {
@@ -615,12 +617,27 @@ mod tests {
     }
 
     #[test]
+    fn collector_counts_the_callers_verdict_in_every_view() {
+        let mut c = Collector::new(None).unwrap();
+        c.add(&res(404, 1, "http://h/a"), true, "p1", Some("A")); // accepted non-2xx
+        c.add(&res(404, 1, "http://h/a"), true, "p1", Some("A"));
+        c.add(&res(200, 1, "http://h/b"), false, "p2", Some("B")); // rejected 200
+        c.close();
+
+        assert_eq!(c.overall().success, 2.0 / 3.0);
+        assert_eq!(c.per_op()["A"].success, 1.0);
+        assert_eq!(c.per_op()["B"].success, 0.0);
+        assert_eq!(c.per_phase["p1"].success, 1.0);
+        assert_eq!(c.per_phase["p2"].success, 0.0);
+    }
+
+    #[test]
     fn collector_splits_overall_op_phase() {
         let mut c = Collector::new(None).unwrap();
-        c.add(&res(200, 1, "http://h/a"), "phase1", Some("A"));
-        c.add(&res(200, 1, "http://h/b"), "phase1", Some("B"));
-        c.add(&res(200, 1, "http://h/a"), "phase2", Some("A"));
-        c.add(&res(200, 1, "http://h/x"), "phase2", None); // matches no op
+        c.add(&res(200, 1, "http://h/a"), true, "phase1", Some("A"));
+        c.add(&res(200, 1, "http://h/b"), true, "phase1", Some("B"));
+        c.add(&res(200, 1, "http://h/a"), true, "phase2", Some("A"));
+        c.add(&res(200, 1, "http://h/x"), true, "phase2", None); // matches no op
         c.close();
 
         assert_eq!(c.overall().requests, 4);
@@ -640,7 +657,7 @@ mod tests {
         assert_eq!(fs::read_link(&link).unwrap(), Path::new(dir.file_name().unwrap()));
 
         let mut c = Collector::new(None).unwrap();
-        c.add(&res(200, 2, "http://h/a"), "phase1", Some("A"));
+        c.add(&res(200, 2, "http://h/a"), true, "phase1", Some("A"));
         c.close();
         let manifest = RunManifest {
             started_at: utc_rfc3339(SystemTime::now()),
@@ -682,7 +699,7 @@ mod tests {
     fn per_phase_only_when_multiphase() {
         let one_dir = tmp("one");
         let mut one = Collector::new(None).unwrap();
-        one.add(&res(200, 1, "http://h/a"), "only", Some("A"));
+        one.add(&res(200, 1, "http://h/a"), true, "only", Some("A"));
         one.close();
         let mf = RunManifest {
             started_at: utc_rfc3339(SystemTime::now()),
@@ -701,8 +718,8 @@ mod tests {
 
         let two_dir = tmp("two");
         let mut two = Collector::new(None).unwrap();
-        two.add(&res(200, 1, "http://h/a"), "p1", Some("A"));
-        two.add(&res(200, 1, "http://h/a"), "p2", Some("A"));
+        two.add(&res(200, 1, "http://h/a"), true, "p1", Some("A"));
+        two.add(&res(200, 1, "http://h/a"), true, "p2", Some("A"));
         two.close();
         write_reports(&two_dir, &two, &mf).unwrap();
         let v: serde_json::Value =
@@ -718,7 +735,7 @@ mod tests {
         for i in 0..3 {
             let mut r = res(200, 1, "http://h/a");
             r.seq = i;
-            c.add(&r, "p1", Some("A"));
+            c.add(&r, true, "p1", Some("A"));
         }
         c.close();
         let text = fs::read_to_string(&path).unwrap();
