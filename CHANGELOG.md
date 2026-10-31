@@ -11,6 +11,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `redliner-import` next to `redliner`. The install script still installs
   releases from before it shipped (`REDLINER_VERSION=v0.5.0`).
 
+### Fixed
+- `redliner-import`:
+  - A path parameter the spec doesn't declare (or declares in another case)
+    gets a TODO pool instead of being sent as a literal `{name}`.
+  - A base URL that isn't `http://` or `https://` (a server written
+    `localhost:8080/api`, or `--base-url api.example.com`) is an error instead
+    of a draft whose every request fails.
+  - Numeric server-variable defaults (`default: 8080`) are substituted.
+  - A spec whose path items are all external `$ref`s says how many were
+    skipped and suggests bundling it, instead of only "no usable operations".
+  - `Accept` and `Content-Type` header parameters are ignored, as OpenAPI
+    requires, instead of becoming scenario headers.
+  - A GraphQL endpoint that redirects is reported with the URL it redirects
+    to, instead of as "introspection is disabled".
+  - Request body examples under `schema.examples` (FastAPI, pydantic v2) are
+    used.
+
 ## [0.5.0] - 2026-10-31
 
 ### Added

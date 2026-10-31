@@ -20,6 +20,11 @@ pub struct Mock {
 /// Serves `status` with `body` to every request on any path, recording each
 /// request in full (headers, then a `Content-Length` body).
 pub async fn spawn_mock(status: u16, content_type: &'static str, body: String) -> Mock {
+    spawn_mock_with(status, content_type, body, String::new()).await
+}
+
+/// [`spawn_mock`] that also sends `extra` header lines, each ending in `\r\n`.
+pub async fn spawn_mock_with(status: u16, content_type: &'static str, body: String, extra: String) -> Mock {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -27,7 +32,7 @@ pub async fn spawn_mock(status: u16, content_type: &'static str, body: String) -
     tokio::spawn(async move {
         loop {
             let Ok((mut sock, _)) = listener.accept().await else { break };
-            let (seen, body) = (seen.clone(), body.clone());
+            let (seen, body, extra) = (seen.clone(), body.clone(), extra.clone());
             tokio::spawn(async move {
                 let mut data = Vec::new();
                 let mut buf = [0u8; 4096];
@@ -55,7 +60,7 @@ pub async fn spawn_mock(status: u16, content_type: &'static str, body: String) -
                 seen.lock().unwrap().push(String::from_utf8_lossy(&data).into_owned());
                 let resp = format!(
                     "HTTP/1.1 {status} Mock\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
-                     Connection: close\r\n\r\n{body}",
+                     {extra}Connection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = sock.write_all(resp.as_bytes()).await;

@@ -61,16 +61,20 @@ pub fn base_url(
     base_override: Option<&str>,
 ) -> Result<String, ImportError> {
     if let Some(b) = base_override {
-        return Ok(b.trim_end_matches('/').to_string());
+        return http_only(b.trim_end_matches('/').to_string());
     }
     let raw = match ver {
         Version::OpenApi3 => match doc.get("servers").and_then(|s| s.get(0)) {
             Some(server) => {
                 let mut url = server.get("url").and_then(Value::as_str).unwrap_or("/").to_string();
                 for (name, var) in server.get("variables").and_then(Value::as_object).into_iter().flatten() {
-                    if let Some(default) = var.get("default").and_then(Value::as_str) {
-                        url = url.replace(&format!("{{{name}}}"), default);
-                    }
+                    // An unquoted YAML default (port: {default: 8080}) is a number.
+                    let default = match var.get("default") {
+                        Some(Value::String(s)) => s.clone(),
+                        Some(Value::Number(n)) => n.to_string(),
+                        _ => continue,
+                    };
+                    url = url.replace(&format!("{{{name}}}"), &default);
                 }
                 url
             }
@@ -101,7 +105,16 @@ pub fn base_url(
             .map(|u| u.to_string())
             .ok_or(ImportError::NoBaseUrl)?,
     };
-    Ok(absolute.trim_end_matches('/').to_string())
+    http_only(absolute.trim_end_matches('/').to_string())
+}
+
+/// `url` when it is an absolute http(s) URL. `Url::parse` alone accepts
+/// "localhost:8080/api" (scheme "localhost"), which redliner can't request.
+fn http_only(url: String) -> Result<String, ImportError> {
+    match reqwest::Url::parse(&url) {
+        Ok(u) if matches!(u.scheme(), "http" | "https") => Ok(url),
+        _ => Err(ImportError::BadBaseUrl(url)),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,7 +250,11 @@ pub fn body_example(doc: &Value, ver: Version, op: &Value) -> Option<Value> {
                         .values()
                         .find_map(|e| resolve(doc, e)?.get("value").cloned())
                 })
-                .or_else(|| resolve(doc, media.get("schema")?)?.get("example").cloned())
+                .or_else(|| {
+                    // 3.1 / JSON Schema `examples: [..]` is where FastAPI puts them.
+                    let schema = resolve(doc, media.get("schema")?)?;
+                    schema.get("example").or_else(|| schema.get("examples")?.get(0)).cloned()
+                })
         }
         Version::Swagger2 => {
             let body = op
@@ -422,5 +439,36 @@ mod tests {
             Some(json!({"name": "Rex"}))
         );
         assert_eq!(body_example(&doc3, v3, &doc3["paths"]["/pets/{petId}"]["get"]), None);
+    }
+
+    #[test]
+    fn body_example_from_schema_examples() {
+        // Where FastAPI / pydantic v2 put body examples (OpenAPI 3.1).
+        let doc = json!({"openapi": "3.1.0", "paths": {}});
+        let op = json!({"requestBody": {"content": {"application/json": {
+            "schema": {"type": "object", "examples": [{"name": "Rex"}, {"name": "Fido"}]}
+        }}}});
+        assert_eq!(body_example(&doc, Version::OpenApi3, &op), Some(json!({"name": "Rex"})));
+    }
+
+    #[test]
+    fn base_url_must_be_http_or_https() {
+        let v3 = Version::OpenApi3;
+        // Url::parse reads "localhost:" as a scheme, so this looked absolute.
+        let schemeless = json!({"openapi": "3.0.0", "servers": [{"url": "localhost:8080/api"}]});
+        let r = base_url(&schemeless, v3, None, None);
+        assert!(matches!(&r, Err(ImportError::BadBaseUrl(u)) if u == "localhost:8080/api"), "{r:?}");
+        let ok = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}]});
+        let r = base_url(&ok, v3, None, Some("api.example.com"));
+        assert!(matches!(&r, Err(ImportError::BadBaseUrl(u)) if u == "api.example.com"), "{r:?}");
+    }
+
+    #[test]
+    fn numeric_server_variable_defaults_are_substituted() {
+        let doc = load_doc(
+            "openapi: 3.0.0\nservers:\n  - url: \"http://h:{port}/api\"\n    variables:\n      port: {default: 8080}\n",
+        )
+        .unwrap();
+        assert_eq!(base_url(&doc, Version::OpenApi3, None, None).unwrap(), "http://h:8080/api");
     }
 }
