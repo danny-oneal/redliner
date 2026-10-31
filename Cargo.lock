@@ -1011,6 +1011,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "redliner-import"
+version = "0.4.1"
+dependencies = [
+ "clap",
+ "rand 0.9.5",
+ "rand_chacha",
+ "redliner",
+ "reqwest",
+ "serde_json",
+ "serde_yaml_ng",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "redliner-volley"
 version = "0.4.1"
 dependencies = [
