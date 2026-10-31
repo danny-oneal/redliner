@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- A status listed in `checks.status` (a 404 you expect, say) now counts as a
+  success everywhere: the success rate, throughput, per-operation and
+  per-phase tables, live lines, `metrics.json`, and the `success_rate` and
+  `throughput_min` SLOs. Only the exit code and the built-in
+  `successful_requests` check honoured it before, so such a run reported 0%
+  success and failed its SLOs.
+
 ## [0.5.1] - 2026-10-31
 
 ### Changed

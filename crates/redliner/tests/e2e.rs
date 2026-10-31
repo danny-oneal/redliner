@@ -775,6 +775,35 @@ async fn e2e_allowed_non_2xx_status_passes_without_slos() {
 }
 
 #[tokio::test]
+async fn e2e_allowed_non_2xx_status_counts_as_success() {
+    // The checker's verdict is the only definition of success: a 404 listed in
+    // `checks.status` is a success in the SLO verdict and in every report.
+    let (origin, hits) = spawn_404_mock().await;
+    let dir = tempdir("allow404-slo");
+    let cfg = dir.join("cfg.yaml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "target:\n  url: {origin}\n  protocol: rest\nload:\n  profile: constant\n  rate: 20\n  duration: 1s\n\
+             checks:\n  status: [404]\nscenarios:\n  - {{name: gone, weight: 1, request: {{method: GET, path: /gone}}}}\n\
+             slos:\n  success_rate: 0.99\n  throughput_min: 5\n"
+        ),
+    )
+    .unwrap();
+    let extra = ["--out", dir.to_str().unwrap(), "--live-stats", "0s"];
+    assert_eq!(run(args(&cfg, &extra)).await, Exit::Ok);
+    assert!(hits.load(Ordering::SeqCst) > 10);
+
+    let report = newest_report(&dir);
+    let metrics: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report.join("metrics.json")).unwrap()).unwrap();
+    assert_eq!(metrics["success"], 1.0, "{metrics}");
+    assert!(metrics["throughput"].as_f64().unwrap() > 5.0, "{metrics}");
+    // The status codes stay what the server said.
+    assert_eq!(metrics["status_codes"]["404"], metrics["requests"], "{metrics}");
+}
+
+#[tokio::test]
 async fn e2e_interrupted_dead_target_exits_130() {
     let dir = tempdir("dead-int");
     let exit = run_with_interrupt(
