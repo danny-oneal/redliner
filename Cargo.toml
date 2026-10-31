@@ -5,7 +5,7 @@ members = ["crates/volley", "crates/redliner", "crates/redliner-import"]
 # The one version for both crates, released together. scripts/release.sh bumps
 # it (and redliner's pin on the engine); CI tags `v<version>` when it lands.
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 
 # A load generator's own overhead is part of every measurement, so release
 # builds trade compile time for a faster, smaller binary. Panics still unwind:
