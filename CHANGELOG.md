@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-31
+
 ### Changed
 - Release archives, `scripts/install.sh` and the Docker image now include
   `redliner-import` next to `redliner`. The install script still installs
@@ -220,7 +222,8 @@ Initial release — a from-scratch Rust port of an internal Go/Vegeta harness.
   violates one or more SLOs.
 - **Reproducibility** — a fixed `load.seed` reproduces pacing and sampling.
 
-[Unreleased]: https://github.com/danny-oneal/redliner/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/danny-oneal/redliner/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/danny-oneal/redliner/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/danny-oneal/redliner/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/danny-oneal/redliner/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/danny-oneal/redliner/compare/v0.3.0...v0.4.0
