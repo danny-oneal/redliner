@@ -27,6 +27,10 @@ pub enum ImportError {
     Header(String),
     #[error("cannot determine the API base URL from the spec; pass --base-url")]
     NoBaseUrl,
+    #[error("base URL {0:?} is not an http:// or https:// URL; pass --base-url")]
+    BadBaseUrl(String),
+    #[error("{url} redirects to {location}; pass that URL instead")]
+    Redirect { url: String, location: String },
     #[error("nothing to scaffold: {0}")]
     NoOperations(String),
     #[error("{}: {source}", path.display())]
