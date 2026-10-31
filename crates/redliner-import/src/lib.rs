@@ -6,6 +6,7 @@ pub mod draft;
 pub mod error;
 pub mod fetch;
 pub mod graphql;
+pub mod openapi;
 
 pub use error::ImportError;
 

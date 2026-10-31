@@ -74,6 +74,18 @@ pub const INTROSPECTION_JSON: &str = include_str!("../tests/fixtures/introspecti
 pub const INTROSPECTION_DISABLED_JSON: &str =
     include_str!("../tests/fixtures/introspection-disabled.json");
 
+/// An OpenAPI 3.0 document (YAML) and a Swagger 2.0 one (JSON).
+pub const PETSTORE3_YAML: &str = include_str!("../tests/fixtures/petstore3.yaml");
+pub const PETSTORE2_JSON: &str = include_str!("../tests/fixtures/petstore2.json");
+
+pub fn petstore3() -> Value {
+    crate::openapi::doc::load_doc(PETSTORE3_YAML).unwrap()
+}
+
+pub fn petstore2() -> Value {
+    crate::openapi::doc::load_doc(PETSTORE2_JSON).unwrap()
+}
+
 /// The parsed introspection fixture.
 pub fn fixture_schema() -> crate::graphql::schema::Schema {
     crate::graphql::schema::parse(&serde_json::from_str(INTROSPECTION_JSON).unwrap()).unwrap()
