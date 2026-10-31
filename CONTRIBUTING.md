@@ -17,6 +17,7 @@ Cargo.toml              workspace manifest
 crates/
   volley/               async load engine, package redliner-volley (no dependency on redliner)
   redliner/            the binary: config, encoders, pools, checks, SLOs, reports
+  redliner-import/     drafts a config from GraphQL introspection or OpenAPI (no runtime dependency on redliner)
 configs/                example scenario files
 docs/                   configuration reference and implementation plans
 ```
@@ -72,7 +73,7 @@ starts with a test that reproduces the bug.
 
 ## Releasing
 
-Versions follow [SemVer](https://semver.org). Both crates share one version,
+Versions follow [SemVer](https://semver.org). All three crates share one version,
 set once under `[workspace.package]` in the root `Cargo.toml`, and redliner
 pins the engine to exactly that version. Don't tag by hand. To cut a release:
 
@@ -84,9 +85,10 @@ pins the engine to exactly that version. Don't tag by hand. To cut a release:
 2. Commit that as `chore(release): X.Y.Z` and open a PR. The PR builds every
    target, and the build fails if the changelog has no notes for `X.Y.Z`.
 3. Merge it. `.github/workflows/release.yml` sees a version with no `vX.Y.Z`
-   tag, builds and smoke-tests every target (the binary must report `X.Y.Z`),
-   then publishes the GitHub release. That creates the tag, uses the
-   changelog section as the notes, and attaches each archive with the
+   tag, builds and smoke-tests every target (`redliner` and `redliner-import`
+   must both report `X.Y.Z`), then publishes the GitHub release. That creates
+   the tag, uses the changelog section as the notes, and attaches each archive
+   (both binaries) with the
    `.sha256` checksum that `scripts/install.sh` requires. 0.x versions are
    published as pre-releases.
 
@@ -96,8 +98,9 @@ the workflow, the release scripts or the workspace `Cargo.toml` runs the same
 builds without publishing. `make test-install` and `make test-release` test
 the scripts locally.
 
-Both crates go to crates.io, engine first: `cargo publish -p redliner-volley`,
-then `cargo publish -p redliner`. The engine's package name is
+The crates go to crates.io, engine first: `cargo publish -p redliner-volley`,
+then `cargo publish -p redliner`, then `cargo publish -p redliner-import`
+(which depends on neither). The engine's package name is
 `redliner-volley` because `volley` belongs to an unrelated crate; redliner
 renames the dependency back to `volley`. CI runs `cargo package --workspace`,
 which builds the packaged `redliner` against the packaged engine.

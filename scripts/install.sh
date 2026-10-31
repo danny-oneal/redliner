@@ -1,12 +1,12 @@
 #!/bin/sh
-# Installs a prebuilt redliner binary from a GitHub release, after checking it
-# against the release's SHA-256 checksum.
+# Installs the prebuilt redliner and redliner-import binaries from a GitHub
+# release, after checking the archive against the release's SHA-256 checksum.
 #
 #   curl -fsSL https://raw.githubusercontent.com/danny-oneal/redliner/main/scripts/install.sh | sh
 #
 # Environment:
 #   REDLINER_VERSION       release tag to install (default: the newest release)
-#   REDLINER_INSTALL_DIR   where to put the binary (default: $HOME/.local/bin)
+#   REDLINER_INSTALL_DIR   where to put the binaries (default: $HOME/.local/bin)
 #   REDLINER_DOWNLOAD_URL  base URL of the release assets (default: GitHub)
 set -eu
 
@@ -40,7 +40,7 @@ case "$os/$arch" in
     Linux/aarch64 | Linux/arm64) target=aarch64-unknown-linux-musl ;;
     Darwin/arm64) target=aarch64-apple-darwin ;;
     Darwin/x86_64) target=x86_64-apple-darwin ;;
-    *) die "no prebuilt binary for $os/$arch; build from source: cargo install --git https://github.com/$repo redliner --locked" ;;
+    *) die "no prebuilt binary for $os/$arch; build from source: cargo install --git https://github.com/$repo redliner redliner-import --locked" ;;
 esac
 
 tmp=$(mktemp -d)
@@ -65,13 +65,17 @@ fetch "$base/$asset.sha256" "$tmp/$asset.sha256" ||
 (cd "$tmp" && check_sha256 "$asset.sha256") || die "checksum mismatch for $asset"
 
 tar -xzf "$tmp/$asset" -C "$tmp" redliner
+# Releases up to v0.5.0 have no redliner-import; install what the archive has.
+tar -xzf "$tmp/$asset" -C "$tmp" redliner-import 2>/dev/null || true
 dir=${REDLINER_INSTALL_DIR:-$HOME/.local/bin}
 mkdir -p "$dir"
-cp "$tmp/redliner" "$dir/redliner.tmp"
-chmod 755 "$dir/redliner.tmp"
-mv "$dir/redliner.tmp" "$dir/redliner"
-
-echo "redliner-install: installed redliner $version to $dir/redliner"
+for bin in redliner redliner-import; do
+    [ -f "$tmp/$bin" ] || continue
+    cp "$tmp/$bin" "$dir/$bin.tmp"
+    chmod 755 "$dir/$bin.tmp"
+    mv "$dir/$bin.tmp" "$dir/$bin"
+    echo "redliner-install: installed $bin $version to $dir/$bin"
+done
 case ":$PATH:" in
     *":$dir:"*) ;;
     *) echo "redliner-install: note: $dir is not on your PATH" ;;
