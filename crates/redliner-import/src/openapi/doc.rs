@@ -84,7 +84,8 @@ pub fn base_url(
                         .get("schemes")
                         .and_then(|s| s.get(0))
                         .and_then(Value::as_str)
-                        .unwrap_or("https");
+                        // Swagger 2.0: default to the scheme the spec was fetched with.
+                        .unwrap_or_else(|| spec_url.map_or("https", |u| u.scheme()));
                     format!("{scheme}://{host}{base_path}")
                 }
                 // Swagger 2.0: no host means the host that serves the spec.
@@ -313,6 +314,20 @@ mod tests {
     fn base_url_from_swagger2_host() {
         let doc = petstore2();
         assert_eq!(base_url(&doc, Version::Swagger2, None, None).unwrap(), "https://pets.example.com/api");
+    }
+
+    #[test]
+    fn swagger2_without_schemes_uses_the_fetch_scheme() {
+        // Swagger 2.0: absent `schemes`, use the scheme the spec was fetched with
+        // (springfox's /v2/api-docs omits it).
+        let doc = json!({"swagger": "2.0", "host": "127.0.0.1:8080", "basePath": "/api"});
+        let fetched = reqwest::Url::parse("http://127.0.0.1:8080/v2/api-docs").unwrap();
+        assert_eq!(
+            base_url(&doc, Version::Swagger2, Some(&fetched), None).unwrap(),
+            "http://127.0.0.1:8080/api"
+        );
+        // Read from a file there is no fetch scheme; https stays the default.
+        assert_eq!(base_url(&doc, Version::Swagger2, None, None).unwrap(), "https://127.0.0.1:8080/api");
     }
 
     #[test]

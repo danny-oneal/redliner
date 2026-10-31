@@ -37,7 +37,9 @@ pub async fn run(cli: Cli, stdout: &mut impl std::io::Write) -> Result<Summary, 
         Command::Graphql(a) => {
             let f = Fetcher::new(&fetch_opts(&a.common))?;
             let schema = graphql::fetch_schema(&f, &a.url).await?;
-            (graphql::draft(&schema, &a.url, a.max_depth as usize)?, a.common)
+            let mut d = graphql::draft(&schema, &scrub(&a.url, true), a.max_depth as usize)?;
+            d.target_url = a.url.clone(); // scrubbed below, with a note if it had credentials
+            (d, a.common)
         }
         Command::Openapi(a) => {
             let is_url = a.spec.starts_with("http://") || a.spec.starts_with("https://");
@@ -56,7 +58,7 @@ pub async fn run(cli: Cli, stdout: &mut impl std::io::Write) -> Result<Summary, 
             };
             let doc = openapi::doc::load_doc(&text)?;
             let opts = openapi::OpenapiOpts {
-                source: format!("OpenAPI document {}", a.spec),
+                source: format!("OpenAPI document {}", scrub(&a.spec, false)),
                 spec_url,
                 base_url: a.base_url,
                 include_unsafe: a.include_unsafe,
@@ -64,6 +66,11 @@ pub async fn run(cli: Cli, stdout: &mut impl std::io::Write) -> Result<Summary, 
             (openapi::draft(&doc, &opts)?, a.common)
         }
     };
+    let target = scrub(&d.target_url, true);
+    if target != d.target_url {
+        d.target_url = target;
+        d.notes.push("the URL's user:password was not written; set target.auth (type: basic) to authenticate".into());
+    }
     d.insecure_tls = common.insecure;
     d.bearer_env = common.bearer_env.clone();
     d.header_names = common.header.iter().map(|(k, _)| k.clone()).collect();
@@ -82,6 +89,26 @@ pub async fn run(cli: Cli, stdout: &mut impl std::io::Write) -> Result<Summary, 
             .map_err(|source| ImportError::Io { path: PathBuf::from("<stdout>"), source })?,
     }
     Ok(summary)
+}
+
+/// `url` without a `user:password@`, and unless `keep_query` without its query
+/// and fragment (a spec URL's query can carry a token); anything that is not
+/// a URL, or has nothing to remove, comes back unchanged.
+fn scrub(url: &str, keep_query: bool) -> String {
+    let Ok(mut u) = reqwest::Url::parse(url) else { return url.to_string() };
+    let drop_query = !keep_query && (u.query().is_some() || u.fragment().is_some());
+    if u.username().is_empty() && u.password().is_none() && !drop_query {
+        return url.to_string();
+    }
+    let _ = u.set_username("");
+    let _ = u.set_password(None);
+    if drop_query {
+        u.set_query(None);
+        u.set_fragment(None);
+    }
+    let s = u.to_string();
+    // Url adds a trailing "/" to an empty path; keep the caller's form.
+    if url.ends_with('/') { s } else { s.trim_end_matches('/').to_string() }
 }
 
 fn fetch_opts(c: &CommonArgs) -> FetchOpts {
@@ -207,6 +234,26 @@ mod tests {
         let (r, yaml) = run_args(&["openapi", &format!("{}/openapi.json", m.url)]).await;
         r.unwrap();
         assert_eq!(assert_contract(&yaml).target.url, format!("{}/v1", m.url));
+    }
+
+    #[tokio::test]
+    async fn credentials_in_urls_are_never_written() {
+        let doc = r#"{"openapi":"3.0.0","servers":[{"url":"/v1"}],"paths":{"/ping":{"get":{"operationId":"ping"}}}}"#;
+        let m = spawn_mock(200, "application/json", doc.to_string()).await;
+        let spec = format!("{}/openapi.json?access_token=SECRETTOKEN", m.url.replace("http://", "http://alice:hunter2@"));
+        let (r, yaml) = run_args(&["openapi", &spec]).await;
+        r.unwrap();
+        assert!(!yaml.contains("alice") && !yaml.contains("hunter2") && !yaml.contains("SECRETTOKEN"), "{yaml}");
+        assert!(yaml.contains("user:password was not written"), "{yaml}");
+        assert_eq!(assert_contract(&yaml).target.url, format!("{}/v1", m.url));
+
+        let g = spawn_mock(200, "application/json", INTROSPECTION_JSON.to_string()).await;
+        let url = format!("{}/graphql", g.url.replace("http://", "http://bob:s3cret@"));
+        let (r, yaml) = run_args(&["graphql", &url]).await;
+        r.unwrap();
+        assert!(!yaml.contains("bob:") && !yaml.contains("s3cret"), "{yaml}");
+        assert!(yaml.contains("user:password was not written"), "{yaml}");
+        assert_eq!(assert_contract(&yaml).target.url, format!("{}/graphql", g.url));
     }
 
     #[tokio::test]
