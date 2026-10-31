@@ -266,7 +266,8 @@ The draft is a starting point to review, not a finished benchmark:
   mutations are listed in the notes, not scaffolded.
 - **Secrets stay out of the file.** `-H "Name: value"` and `--bearer-env VAR`
   authenticate the schema fetch; the draft records only the header names (in a
-  comment) and `auth.token_env: VAR`, never a value.
+  comment) and `auth.token_env: VAR`, never a value. A `user:password@` in a
+  URL, and the query of a spec URL, are left out too.
 - **Defaults** are a constant 10 rps for 30s, with suggested SLOs commented
   out. `-k` accepts invalid certificates and sets `insecure_tls`. `-o` refuses
   to overwrite an existing file without `--force`. Errors exit `2`.

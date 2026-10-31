@@ -60,6 +60,7 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
             let base = op
                 .get("operationId")
                 .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty())
                 .map_or_else(|| format!("{upper} {path}"), String::from);
             let name = d.scenario_name(&base);
 
@@ -98,6 +99,15 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
             }
 
             let body = matches!(method, "post" | "put" | "patch").then(|| match body_example(doc, ver, op) {
+                // redliner reads `{{` in a body as a placeholder (compact JSON
+                // has it only inside strings); a pool value is sent verbatim.
+                Some(v) if v.to_string().contains("{{") => {
+                    let pool = d.add_pool(
+                        &format!("{name}_body"),
+                        PoolDraft { values: vec![Value::String(v.to_string())], todo: None },
+                    );
+                    format!("{{{{{pool}}}}}")
+                }
                 Some(v) => v.to_string(),
                 None => {
                     d.notes.push(format!("{name}: no JSON request body example; body is {{}} (TODO)"));
@@ -288,5 +298,30 @@ mod tests {
         assert_eq!(count(&petstore3(), false), 3);
         assert_eq!(count(&petstore3(), true), 5);
         assert_eq!(count(&petstore2(), false), 2);
+    }
+
+    #[test]
+    fn body_examples_containing_braces_are_sent_verbatim() {
+        let example = json!({"html": "<p>Hello {{name}}</p>"});
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {"/templates": {"post": {
+            "operationId": "createTemplate",
+            "requestBody": {"content": {"application/json": {"example": example}}}
+        }}}});
+        let cfg = assert_contract(&render(&draft(&doc, &opts(true)).unwrap()));
+        let pools = redliner::data::build_pools(&cfg.data).unwrap();
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(1);
+        let sent = redliner::data::render_string(&cfg.scenarios[0].request.body, &pools, &mut rng).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&sent).unwrap(), example);
+    }
+
+    #[test]
+    fn empty_operation_ids_fall_back_to_method_and_path() {
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {
+            "/a": {"get": {"operationId": ""}}, "/b": {"get": {"operationId": "  "}}
+        }});
+        let d = draft(&doc, &opts(false)).unwrap();
+        let names: Vec<&str> = d.scenarios.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["GET /a", "GET /b"]);
+        assert_contract(&render(&d));
     }
 }
