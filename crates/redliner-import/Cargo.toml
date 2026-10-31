@@ -11,6 +11,10 @@ readme = "../../README.md"
 keywords = ["load-testing", "graphql", "openapi", "swagger", "scaffold"]
 categories = ["command-line-utilities", "development-tools::testing"]
 
+[[bin]]
+name = "redliner-import"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4.5.61", features = ["derive"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
