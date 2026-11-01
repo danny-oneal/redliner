@@ -31,7 +31,8 @@ pub struct Metrics {
     pub rate: f64,
     /// Successful requests per second over the window including final latency.
     pub throughput: f64,
-    /// Fraction of requests with no error and a 2xx/3xx code.
+    /// Fraction of requests counted as successes: by default those with no
+    /// error and a 2xx/3xx code (see [`Metrics::add_with_success`]).
     pub success: f64,
     pub latencies: Latencies,
     pub status_codes: BTreeMap<u16, u64>,
@@ -82,8 +83,16 @@ impl Metrics {
         }
     }
 
-    /// Record one result.
+    /// Record one result, counting it a success when it has no error and a
+    /// 2xx/3xx code.
     pub fn add(&mut self, r: &AttackResult) {
+        self.add_with_success(r, r.error.is_none() && (200..400).contains(&r.code));
+    }
+
+    /// Record one result with the caller's own verdict on whether it
+    /// succeeded, for callers whose notion of success is not 2xx/3xx (an
+    /// allowed 404, say). The status code is still recorded as received.
+    pub fn add_with_success(&mut self, r: &AttackResult, success: bool) {
         self.requests += 1;
         self.bytes_in += r.bytes_in;
         self.bytes_out += r.bytes_out;
@@ -110,7 +119,7 @@ impl Metrics {
             self.end = Some(done);
         }
 
-        if r.error.is_none() && (200..400).contains(&r.code) {
+        if success {
             self.successes += 1;
         }
         if let Some(e) = &r.error {
@@ -167,6 +176,26 @@ mod tests {
     use super::*;
     use crate::target::AttackResult;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn add_with_success_takes_the_callers_verdict() {
+        let ok = results().remove(0); // 200, no error
+        let mut m = Metrics::new();
+        // Two 404s the caller accepted, a 200 it rejected, and a 404 under
+        // the default rule (2xx/3xx only). The default rule alone would count
+        // one success of four.
+        m.add_with_success(&AttackResult { code: 404, ..ok.clone() }, true);
+        m.add_with_success(&AttackResult { code: 404, ..ok.clone() }, true);
+        m.add_with_success(&ok, false);
+        m.add(&AttackResult { code: 404, ..ok.clone() });
+        m.close();
+
+        assert_eq!(m.requests, 4);
+        assert_eq!(m.success, 0.5);
+        // The codes are recorded as the server sent them.
+        assert_eq!(m.status_codes[&404], 3);
+        assert_eq!(m.status_codes[&200], 1);
+    }
 
     fn results() -> Vec<AttackResult> {
         let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);

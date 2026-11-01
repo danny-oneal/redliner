@@ -374,9 +374,10 @@ async fn attack_profile(
         );
         while let Some(mut r) = live.recv(&mut rx, &ph.name).await {
             checker.apply(&mut r);
-            live.add(&r);
+            let ok = checker.accepts(&r);
+            live.add(&r, ok);
             let op = targeter.operation(&r.method, &r.url);
-            collector.add(&r, &ph.name, op.as_deref());
+            collector.add(&r, ok, &ph.name, op.as_deref());
         }
     }
     Ok(())
@@ -405,8 +406,9 @@ async fn attack_replay(
     live.begin();
     while let Some(mut r) = live.recv(&mut rx, "replay").await {
         checker.apply(&mut r);
-        live.add(&r);
-        collector.add(&r, "replay", targeter.operation(r.seq));
+        let ok = checker.accepts(&r);
+        live.add(&r, ok);
+        collector.add(&r, ok, "replay", targeter.operation(r.seq));
         fired += 1;
     }
     Ok(fired)
