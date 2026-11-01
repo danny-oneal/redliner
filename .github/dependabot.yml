@@ -7,6 +7,12 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # rand and rand_chacha share rand_core, so a bump of one without the other
+      # puts two rand_core majors in the build and cannot compile. Pre-1.0 minor
+      # bumps (0.9 -> 0.10) are not "minor" to this config's cargo group, so
+      # without this group they arrive as separate PRs. Listed first so it wins.
+      rand:
+        patterns: ["rand", "rand_*"]
       cargo:
         update-types: [minor, patch]
 
@@ -17,3 +23,8 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+    ignore:
+      # This action's tags are Rust versions (@1.88 installs Rust 1.88), which
+      # ci.yml's msrv job pins on purpose. Dependabot reads them as releases of
+      # the action and "upgrades" the minimum-version check to a newer Rust.
+      - dependency-name: "dtolnay/rust-toolchain"
