@@ -165,7 +165,7 @@ jobs:
           "ASSET=$staging.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload
-        if: needs.plan.outputs.release == 'true'
+        if: needs.plan.outputs.release == 'true' || github.event_name == 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
@@ -201,3 +201,28 @@ jobs:
           # 0.x releases stay pre-releases (scripts/install.sh includes them).
           prerelease: ${{ startsWith(needs.plan.outputs.version, '0.') }}
           files: dist/*
+
+  # REHEARSAL ONLY, NEVER MERGE. Runs the artifact steps a real release uses
+  # (upload-artifact@v7 from all six build legs, then download-artifact@v8 with
+  # merge-multiple, exactly as the publish job does) and checks the result.
+  # It publishes nothing.
+  rehearse:
+    needs: [plan, build]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Check what a release would publish
+        run: |
+          ls -l dist
+          test "$(ls dist | wc -l)" -eq 12
+          cd dist
+          for f in *.sha256; do sha256sum -c "$f"; done
+          for t in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl aarch64-unknown-linux-musl aarch64-apple-darwin x86_64-apple-darwin; do
+            tar -tzf "redliner-ci-$t.tar.gz" | sort | tr '\n' ' '; echo "<- $t"
+          done
+          unzip -l redliner-ci-x86_64-pc-windows-msvc.zip
