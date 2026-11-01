@@ -133,7 +133,7 @@ impl PoissonPacer {
 
 impl Pacer for PoissonPacer {
     fn pace(&self, elapsed: Duration, hits: u64) -> (Duration, bool) {
-        use rand::Rng;
+        use rand::RngExt;
         if self.mean_rate <= 0.0 {
             return (Duration::ZERO, true);
         }

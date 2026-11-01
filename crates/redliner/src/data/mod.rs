@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rand::Rng;
+use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
 use serde_json::Value;
 
@@ -419,6 +419,37 @@ mod tests {
             }
             assert!(seen.insert(s.to_string()), "duplicate {s}");
         }
+    }
+
+    /// `load.seed` promises reproducible runs, yet the other seeded tests here
+    /// compare a run with itself, so none would notice the random stream
+    /// changing under a dependency bump. These literals were drawn with
+    /// rand 0.9.5 / rand_chacha 0.9.0 and are reproduced unchanged by rand 0.10.
+    #[test]
+    fn seeded_draws_are_pinned_to_the_values_rand_0_9_produced() {
+        let list = Pool::List((0..100).map(|i| json!(i)).collect());
+        let range = Pool::Range { min: 1, max: 1000 };
+        let draws = |pool: &Pool, n: usize| {
+            let mut r = rng(); // seed 1
+            (0..n).map(|_| pool.sample(&mut r)).collect::<Vec<_>>()
+        };
+        assert_eq!(draws(&list, 5), [json!(54), json!(40), json!(98), json!(8), json!(21)]);
+        assert_eq!(draws(&range, 5), [json!(403), json!(81), json!(597), json!(220), json!(284)]);
+        assert_eq!(
+            draws(&Pool::Uuid, 2),
+            [json!("b1ea6bd8-6503-42dc-a553-583617e08e42"), json!("131b08b0-71b2-435e-a3e5-a10be2bf1dda")]
+        );
+
+        // The replay targeter's per-hit stream: the seed, then set_stream(seq).
+        let mut r = rng();
+        r.set_stream(7);
+        let stream: Vec<_> = (0..5).map(|_| list.sample(&mut r)).collect();
+        assert_eq!(stream, [json!(19), json!(46), json!(19), json!(74), json!(25)]);
+
+        // f64 draws, which the scenario mix and the Poisson pacer rely on.
+        let mut r = rng();
+        let bits: Vec<u64> = (0..3).map(|_| r.random::<f64>().to_bits()).collect();
+        assert_eq!(bits, [4600922157057517826, 4590456677328490120, 4603548555962400992]);
     }
 
     #[test]
