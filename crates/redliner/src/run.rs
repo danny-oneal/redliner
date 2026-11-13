@@ -305,11 +305,12 @@ where
     manifest.passed = Some(passed);
     manifest.replay = replay.as_ref().map(|r| r.summary.clone());
     manifest.aborted = interrupted;
-    report::write_reports(&report_dir, &collector, &manifest)
-        .map_err(|e| anyhow::anyhow!("write reports: {e}"))?;
-    if cfg.report.junit {
-        report::write_junit(&report_dir.join("junit.xml"), &results, elapsed)
-            .map_err(|e| anyhow::anyhow!("write junit: {e}"))?;
+    // A failed write is reported after the summary, so the verdict still shows.
+    let mut written = report::write_reports(&report_dir, &collector, &manifest)
+        .map_err(|e| anyhow::anyhow!("write reports: {e}"));
+    if written.is_ok() && cfg.report.junit {
+        written = report::write_junit(&report_dir.join("junit.xml"), &results, elapsed)
+            .map_err(|e| anyhow::anyhow!("write junit: {e}"));
     }
 
     // A reader that went away (`| head`) must not cost the run its verdict.
@@ -327,6 +328,7 @@ where
             eprintln!("redliner: print summary: {e}");
         }
     }
+    written?;
 
     if interrupted {
         return Ok(Exit::Interrupted);

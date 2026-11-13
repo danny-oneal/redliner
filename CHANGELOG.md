@@ -39,6 +39,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - An interrupted run's summary labels its first line `run           :
   INTERRUPTED (partial results)`; it shared the `status        :` label with
   the status-class line, so a script matching that label read the wrong one.
+- A report file that can't be written no longer hides the run's result: the
+  summary (with the SLO verdict) is printed first, then the error, which now
+  names the file (`write reports: reports/…/metrics.json: Is a directory`
+  instead of `Is a directory`). The exit code is still 2.
 
 ## [0.5.1] - 2026-10-31
 

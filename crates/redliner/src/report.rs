@@ -102,7 +102,7 @@ impl Collector {
     /// also appended as one JSON line to that file.
     pub fn new(raw_path: Option<&Path>) -> std::io::Result<Self> {
         let raw = match raw_path {
-            Some(p) => Some(BufWriter::new(File::create(p)?)),
+            Some(p) => Some(BufWriter::new(File::create(p).map_err(at(p))?)),
             None => None,
         };
         Ok(Self {
@@ -163,7 +163,7 @@ pub fn make_report_dir(base: &str, start: SystemTime) -> std::io::Result<PathBuf
     let secs = start.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
     let (y, mo, d, h, mi, s) = ymd_hms(secs);
     let stamp = format!("{y:04}{mo:02}{d:02}T{h:02}{mi:02}{s:02}Z");
-    fs::create_dir_all(base)?;
+    fs::create_dir_all(base).map_err(at(Path::new(base)))?;
     let mut name = stamp.clone();
     let mut dir = Path::new(base).join(&name);
     let mut n = 0;
@@ -175,7 +175,7 @@ pub fn make_report_dir(base: &str, start: SystemTime) -> std::io::Result<PathBuf
                 name = format!("{stamp}-{n}");
                 dir = Path::new(base).join(&name);
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(at(&dir)(e)),
         }
     }
 
@@ -191,8 +191,10 @@ pub fn make_report_dir(base: &str, start: SystemTime) -> std::io::Result<PathBuf
 /// Writes the text/histogram/metrics/per-op/per-phase/manifest files
 /// (Go `writeReports`). `per_phase.json` only when more than one phase ran.
 pub fn write_reports(dir: &Path, c: &Collector, manifest: &RunManifest) -> std::io::Result<()> {
-    fs::write(dir.join("text.txt"), text_summary(&c.overall))?;
-    fs::write(dir.join("histogram.txt"), c.hist.report())?;
+    let text = dir.join("text.txt");
+    fs::write(&text, text_summary(&c.overall)).map_err(at(&text))?;
+    let hist = dir.join("histogram.txt");
+    fs::write(&hist, c.hist.report()).map_err(at(&hist))?;
     write_json(&dir.join("metrics.json"), &MetricsJson::from(&c.overall))?;
     if !c.per_op.is_empty() {
         write_json(&dir.join("per_operation.json"), &summarize(&c.per_op))?;
@@ -220,7 +222,7 @@ pub fn write_junit(path: &Path, slos: &[SloResult], elapsed: Duration) -> std::i
                 .then(|| format!("{}: target {}, observed {}", r.name, r.target, r.observed)),
         })
         .collect();
-    write_junit_suite(path, "redliner.slos", &cases, elapsed)
+    write_junit_suite(path, "redliner.slos", &cases, elapsed).map_err(at(path))
 }
 
 /// One JUnit `<testcase>`; `failure` is the message of a failed one.
@@ -510,7 +512,13 @@ fn text_summary(m: &Metrics) -> String {
 fn write_json<T: Serialize>(path: &Path, v: &T) -> std::io::Result<()> {
     let mut data = serde_json::to_vec_pretty(v).map_err(std::io::Error::other)?;
     data.push(b'\n');
-    fs::write(path, data)
+    fs::write(path, data).map_err(at(path))
+}
+
+/// Names `path` in an I/O error, which on its own reads only e.g.
+/// `Not a directory`.
+fn at(path: &Path) -> impl FnOnce(std::io::Error) -> std::io::Error + '_ {
+    move |e| std::io::Error::new(e.kind(), format!("{}: {e}", path.display()))
 }
 
 fn esc(s: &str) -> String {
@@ -715,6 +723,42 @@ mod tests {
         let names: Vec<&str> = dirs.iter().map(|d| d.file_name().unwrap().to_str().unwrap()).collect();
         assert_eq!(names, ["20231114T221320Z", "20231114T221320Z-1", "20231114T221320Z-2"]);
         assert_eq!(fs::read_link(base.join("latest")).unwrap(), Path::new(names[2]));
+    }
+
+    #[test]
+    fn io_errors_name_the_path() {
+        let base = tmp("io-errors");
+        let file = base.join("a-file");
+        fs::write(&file, "").unwrap();
+        let e = make_report_dir(file.to_str().unwrap(), SystemTime::now()).unwrap_err();
+        assert!(e.to_string().contains(file.to_str().unwrap()), "{e}");
+
+        let raw = base.join("missing").join("results.jsonl");
+        let e = Collector::new(Some(&raw)).err().unwrap();
+        assert!(e.to_string().contains(raw.to_str().unwrap()), "{e}");
+
+        // A directory where a report file belongs makes that write fail.
+        let dir = make_report_dir(base.to_str().unwrap(), SystemTime::now()).unwrap();
+        fs::create_dir(dir.join("metrics.json")).unwrap();
+        fs::create_dir(dir.join("junit.xml")).unwrap();
+        let mut c = Collector::new(None).unwrap();
+        c.close();
+        let manifest = RunManifest {
+            started_at: utc_rfc3339(SystemTime::now()),
+            finished_at: None,
+            config_file: "c".into(),
+            config: RedactedConfig::from(&Config::default()),
+            seed: 0,
+            requests: None,
+            slo_results: vec![],
+            passed: None,
+            replay: None,
+            aborted: false,
+        };
+        let e = write_reports(&dir, &c, &manifest).unwrap_err();
+        assert!(e.to_string().contains(dir.join("metrics.json").to_str().unwrap()), "{e}");
+        let e = write_junit(&dir.join("junit.xml"), &[], Duration::ZERO).unwrap_err();
+        assert!(e.to_string().contains(dir.join("junit.xml").to_str().unwrap()), "{e}");
     }
 
     #[test]
