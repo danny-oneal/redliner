@@ -34,6 +34,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Harvest can extract from a response that is a top-level JSON array
   (`extract: { skus: "[].sku" }`), as the docs said `[]` would. A path that
   doesn't fit the response now names its pool in the error.
+- Pool validation: a file pool's `as` must be `string` or `int` (`as: Int`
+  used to mean string), a `range` pool needs `min`/`max` (it used to yield
+  only `0`), and a field the pool's type doesn't use (`as` on a `list`, `min`
+  on a `sequence`) is an error instead of being ignored. A negative
+  `target.max_idle_conns` is rejected; it used to turn connection pooling off.
 
 ## [0.5.1] - 2026-10-31
 

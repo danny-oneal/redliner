@@ -652,3 +652,49 @@ fn placeholders_must_name_a_pool() {
         assert!(t.contains(want), "{want}: {t}");
     }
 }
+
+#[test]
+fn file_pool_as_validated() {
+    // Anything but `int` used to mean string, so `as: Int` fed strings to Int! variables.
+    let y = format!(
+        "{GQL_HEAD}data:\n  pools:\n    f: {{type: file, path: f.txt, as: Int}}\n    \
+         g: {{type: file, path: g.txt, as: string}}\n    h: {{type: file, path: h.txt, as: int}}\n{ONE_GQL}"
+    );
+    let t = err_text(load_str(&y));
+    assert!(t.contains("pool \"f\": file as \"Int\" not supported (string|int)"), "{t}");
+    assert!(!t.contains("pool \"g\"") && !t.contains("pool \"h\""), "{t}");
+}
+
+#[test]
+fn pool_fields_of_another_type_rejected() {
+    let y = format!(
+        "{GQL_HEAD}data:\n  pools:\n    l: {{type: list, values: [1], as: int}}\n    \
+         s: {{type: sequence, min: 5, values: [1]}}\n    u: {{type: uuid, start: 1}}\n    \
+         r: {{type: range, min: 1, max: 2, path: x}}\n    ok: {{type: range, min: -5, max: 0}}\n{ONE_GQL}"
+    );
+    let t = err_text(load_str(&y));
+    for want in [
+        "pool \"l\": as is not used by type \"list\"",
+        "pool \"s\": values, min are not used by type \"sequence\"",
+        "pool \"u\": start is not used by type \"uuid\"",
+        "pool \"r\": path is not used by type \"range\"",
+    ] {
+        assert!(t.contains(want), "{want}: {t}");
+    }
+    assert!(!t.contains("pool \"ok\""), "{t}");
+}
+
+#[test]
+fn range_pool_needs_bounds() {
+    // Without min and max it validated and always yielded 0.
+    let y = format!("{GQL_HEAD}data:\n  pools:\n    r: {{type: range}}\n{ONE_GQL}");
+    let t = err_text(load_str(&y));
+    assert!(t.contains("pool \"r\": range pool needs min and max"), "{t}");
+}
+
+#[test]
+fn negative_max_idle_conns_rejected() {
+    // -1 became 0 (no pooling) while 0 means the 10000 default.
+    let t = err_text(load_str(&format!("{GQL_HEAD}  max_idle_conns: -1\n{ONE_GQL}")));
+    assert!(t.contains("target.max_idle_conns must be >= 0, got -1"), "{t}");
+}

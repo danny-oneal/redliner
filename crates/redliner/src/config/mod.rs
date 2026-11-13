@@ -477,6 +477,12 @@ impl Config {
             }
         }
         check_headers("target.headers", &t.headers, &mut errs);
+        if t.max_idle_conns < 0 {
+            errs.push(format!(
+                "target.max_idle_conns must be >= 0, got {}",
+                t.max_idle_conns
+            ));
+        }
         // Go also checks target.protocol here; in Rust an unknown protocol
         // is rejected at parse time by the `Protocol` enum.
         let a = &t.auth;
@@ -652,9 +658,17 @@ impl Config {
                     if p.path.is_empty() {
                         errs.push(format!("pool {name:?}: file pool needs path"));
                     }
+                    if !matches!(p.as_type.as_str(), "" | "string" | "int") {
+                        errs.push(format!(
+                            "pool {name:?}: file as {:?} not supported (string|int)",
+                            p.as_type
+                        ));
+                    }
                 }
                 "range" => {
-                    if p.max < p.min {
+                    if p.min == 0 && p.max == 0 {
+                        errs.push(format!("pool {name:?}: range pool needs min and max"));
+                    } else if p.max < p.min {
                         errs.push(format!("pool {name:?}: range max < min"));
                     }
                 }
@@ -671,6 +685,36 @@ impl Config {
                     "pool {name:?}: type {other:?} not supported \
                      (list|file|range|uuid|sequence|timestamp)"
                 )),
+            }
+            // A field another pool type reads is silently ignored otherwise.
+            let used: &[&str] = match p.pool_type.as_str() {
+                "list" => &["values"],
+                "file" => &["path", "as"],
+                "range" => &["min", "max"],
+                "sequence" => &["start"],
+                "timestamp" => &["as"],
+                "uuid" => &[],
+                _ => continue,
+            };
+            let stray: Vec<&str> = [
+                ("values", !p.values.is_empty()),
+                ("path", !p.path.is_empty()),
+                ("min", p.min != 0),
+                ("max", p.max != 0),
+                ("start", p.start.is_some()),
+                ("as", !p.as_type.is_empty()),
+            ]
+            .into_iter()
+            .filter(|(field, set)| *set && !used.contains(field))
+            .map(|(field, _)| field)
+            .collect();
+            if !stray.is_empty() {
+                let verb = if stray.len() == 1 { "is" } else { "are" };
+                errs.push(format!(
+                    "pool {name:?}: {} {verb} not used by type {:?}",
+                    stray.join(", "),
+                    p.pool_type
+                ));
             }
         }
         for (i, h) in self.data.harvest.iter().enumerate() {

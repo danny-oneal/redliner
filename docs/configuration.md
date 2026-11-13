@@ -35,7 +35,7 @@ report:  { ... }  # optional
 | `headers`    | map     | `{}`       | sent on every request; credential values are redacted in `run_manifest.json` (see below) |
 | `auth`       | object  | `none`     | see below; credentials are read from the environment, never the file |
 | `keep_alive` | bool    | `true`     | reuse pooled connections between requests |
-| `max_idle_conns` | int | `10000`    | max idle pooled connections per host |
+| `max_idle_conns` | int | `10000`    | max idle pooled connections per host; `0` means the default, negative is an error |
 | `http2`      | bool    | `false`    | negotiate HTTP/2 with prior knowledge (cleartext h2c or a known h2 server) |
 | `insecure_tls` | bool  | `false`    | skip TLS certificate verification (`--insecure` / `-k`), for staging or in-cluster services with self-signed certs; covers the harvest probe too, and the run prints a warning when it's on |
 
@@ -268,8 +268,8 @@ Each pool is keyed by name. `type` selects the source:
 | `type`  | fields            | yields |
 | ------- | ----------------- | ------ |
 | `list`  | `values: [...]`   | a random element per draw; numbers keep their native type |
-| `range` | `min`, `max`      | a random integer in `min..=max` |
-| `file`  | `path`, `as`      | one line per entry; `as: int` (default `string`) parses to integers; blank lines and `#` comments are skipped |
+| `range` | `min`, `max`      | a random integer in `min..=max`; set at least one of them (not both `0`) |
+| `file`  | `path`, `as`      | one line per entry; `as: string` (default) or `as: int`, which parses each line to an integer; blank lines and `#` comments are skipped |
 | `uuid`  | —                 | a new random (v4) UUID string per draw, from `load.seed` |
 | `sequence` | `start`        | the next integer per draw: `start`, `start+1`, ... (default `start: 1`) |
 | `timestamp` | `as`          | the time of the draw: `rfc3339` (default, e.g. `2026-01-02T03:04:05.678Z`), `unix` (seconds) or `unix_ms`; `unix`/`unix_ms` are integers |
@@ -285,7 +285,9 @@ data:
     sent_at:      { type: timestamp, as: unix_ms }
 ```
 
-File paths resolve relative to the config file.
+File paths resolve relative to the config file. A field the pool's type
+doesn't use (`as` on a `list`, `min` on a `sequence`) is an error rather than
+silently ignored.
 
 Every placeholder is its own draw, so `{{order_no}}` twice in one body gives
 two different numbers. The generator pools are unique *within* a run: the
