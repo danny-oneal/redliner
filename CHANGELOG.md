@@ -34,6 +34,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   error, even when the log has no entry they would both match.
 - Replay: a UTF-8 byte-order mark at the start of a JSONL log no longer makes
   the first line malformed (dropping its event).
+- Docs: `replay.copies` multiplies the peak rate by up to N, not only the
+  average; `docs/configuration.md` said the peak was not multiplied.
 - Replay reads a JSONL log line by line instead of loading the whole file
   first, so peak memory no longer includes a copy of the raw log (a 132 MB
   log: about 300 MB to 220 MB).

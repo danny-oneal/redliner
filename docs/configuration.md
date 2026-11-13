@@ -145,11 +145,12 @@ log replays immediately.
 **Amplification.** `speed` divides every offset. `copies` overlays N copies of
 the matched log in parallel: copy *k* is rotated by *k*·span/N inside the
 original span (offsets that run past the end wrap to the start). This
-multiplies *total* and *average* volume by N over the *same* duration, but
-because the copies are staggered rather than stacked, the busiest instants are
-spread out: the **peak rate is not multiplied**. The `peak` value in the replay
-summary reports the effective peak after this rotation. Use `speed` to compress
-time and `copies` to multiply average load; they compose. The schedule is
+multiplies *total* and *average* volume by N over the *same* duration, and the
+**peak rate by up to N** as well: a steady log's peak is multiplied by N, and
+the stagger lowers it only when the log is bursty (the copies' bursts land at
+different instants). Check `peak` in the replay summary (`--validate` prints it
+without firing anything) before an amplified run. Use `speed` to compress time
+and `copies` to multiply load; they compose. The schedule is
 capped at 10,000,000 total hits (after `copies`); a larger one is a config
 error (exit `2`), so narrow the window or lower `copies`.
 
