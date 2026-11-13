@@ -28,7 +28,8 @@ pub const INTROSPECTION_QUERY: &str = "query RedlinerImport {
 }
 fragment TypeRef on __Type {
   kind name ofType { kind name ofType { kind name ofType { kind name ofType {
-  kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } }
+  kind name ofType { kind name ofType { kind name ofType { kind name ofType {
+  kind name } } } } } } } }
 }
 ";
 

@@ -109,6 +109,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `HTTP://…` is fetched instead of read as a file path.
   - A spec whose operations share one `operationId` (5000 of them, say)
     drafts in under a second instead of minutes.
+  - GraphQL: a type wrapped in 8 lists and non-nulls (`[[[[Int]!]!]!]!`)
+    is read (7 before), and a deeper one's error names its field
+    (`Query.matrix: LIST type without ofType …`) instead of naming nothing.
 
 ## [0.5.1] - 2026-10-31
 
