@@ -32,6 +32,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   released as the attack goes instead of at its end.
 - A hit whose worker task panics is reported as a failed request
   (`worker panicked: …`) instead of vanishing from the counts.
+- Transport errors name their kind and cause and leave out the URL, e.g.
+  `connect: error sending request: client error (Connect): tcp connect
+  error: Connection refused (os error 111)` or `timeout: error sending
+  request: operation timed out`. They used to read `error sending request
+  for url (…)` whatever the cause, so a timeout looked like a refused
+  connection, and every distinct URL added one more "distinct" error to
+  the summary and `metrics.json` (millions on a long run against a target
+  that went down). The list of distinct errors is also capped at 1000.
 
 ## [0.5.1] - 2026-10-31
 

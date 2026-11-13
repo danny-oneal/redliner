@@ -7,6 +7,9 @@ use hdrhistogram::Histogram;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime};
 
+/// Distinct error strings kept in [`Metrics::errors`].
+const MAX_ERRORS: usize = 1000;
+
 /// Latency summary (Go `vegeta.LatencyMetrics`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Latencies {
@@ -36,7 +39,7 @@ pub struct Metrics {
     pub success: f64,
     pub latencies: Latencies,
     pub status_codes: BTreeMap<u16, u64>,
-    /// Distinct error strings, sorted.
+    /// Distinct error strings, sorted: the first 1000 seen.
     pub errors: Vec<String>,
     pub bytes_in: u64,
     pub bytes_out: u64,
@@ -123,7 +126,7 @@ impl Metrics {
             self.successes += 1;
         }
         if let Some(e) = &r.error {
-            if !e.is_empty() {
+            if !e.is_empty() && self.error_set.len() < MAX_ERRORS {
                 self.error_set.insert(e.clone());
             }
         }
@@ -294,6 +297,19 @@ mod tests {
         for (name, p) in [("p90", l.p90), ("p95", l.p95), ("p99", l.p99), ("p99.9", l.p999)] {
             assert!(p <= l.max, "{name} {p:?} > max {:?}", l.max);
         }
+    }
+
+    #[test]
+    fn distinct_errors_are_capped() {
+        let ok = results().remove(0);
+        let mut m = Metrics::new();
+        for i in 0..MAX_ERRORS + 10 {
+            m.add(&AttackResult { error: Some(format!("e{i:05}")), ..ok.clone() });
+        }
+        m.close();
+        assert_eq!(m.errors.len(), MAX_ERRORS);
+        assert_eq!(m.errors[0], "e00000");
+        assert_eq!(m.requests, MAX_ERRORS as u64 + 10);
     }
 
     #[test]

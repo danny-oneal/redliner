@@ -299,7 +299,7 @@ async fn run_hit<T: Targeter + ?Sized>(
                     latency: start.elapsed(),
                     bytes_in: 0,
                     bytes_out,
-                    error: Some(e.to_string()),
+                    error: Some(describe(e)),
                     method: method.to_string(),
                     url,
                     body: Vec::new(),
@@ -314,12 +314,36 @@ async fn run_hit<T: Targeter + ?Sized>(
             latency: start.elapsed(),
             bytes_in: 0,
             bytes_out,
-            error: Some(e.to_string()),
+            error: Some(describe(e)),
             method: method.to_string(),
             url,
             body: Vec::new(),
         },
     }
+}
+
+/// A transport error as `kind: message: cause: ...`, without the URL (each
+/// result carries its own), so the same failure reads the same on every hit.
+fn describe(e: reqwest::Error) -> String {
+    let kind = if e.is_timeout() {
+        "timeout"
+    } else if e.is_connect() {
+        "connect"
+    } else if e.is_body() {
+        "body"
+    } else if e.is_decode() {
+        "decode"
+    } else {
+        "request"
+    };
+    let e = e.without_url();
+    let mut msg = format!("{kind}: {e}");
+    let mut source = std::error::Error::source(&e);
+    while let Some(cause) = source {
+        msg.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    msg
 }
 
 #[cfg(test)]
@@ -475,6 +499,66 @@ mod tests {
             assert!(r.error.is_some(), "expected a transport error");
             assert_eq!(r.code, 0, "transport failure should carry code 0");
         }
+    }
+
+    /// Points hit `seq` at `{base}{seq}`, so every request has its own URL.
+    struct PathTargeter {
+        base: String,
+    }
+
+    impl Targeter for PathTargeter {
+        fn target(&self, seq: u64, t: &mut Target) -> Result<(), Error> {
+            t.method = http::Method::GET;
+            t.url = format!("{}{seq}", self.base);
+            Ok(())
+        }
+    }
+
+    /// Collects the distinct errors of a 10-hit attack.
+    async fn distinct_errors(base: String, timeout: Duration) -> Vec<String> {
+        let attacker = Attacker::new(cfg(timeout)).unwrap();
+        let pacer = Arc::new(ConstantPacer { freq: 50, per: Duration::from_secs(1) });
+        let mut rx = attacker.attack(
+            Arc::new(PathTargeter { base }),
+            pacer,
+            Duration::from_millis(210),
+            "errs".to_string(),
+        );
+        let mut errors = std::collections::BTreeSet::new();
+        let mut n = 0;
+        while let Some(r) = rx.recv().await {
+            n += 1;
+            errors.insert(r.error.expect("a transport error"));
+        }
+        assert!(n >= 5, "fired only {n}");
+        errors.into_iter().collect()
+    }
+
+    #[tokio::test]
+    async fn transport_error_names_its_kind_and_cause_not_the_url() {
+        // Nothing listens on port 1 → connection refused.
+        let errors = distinct_errors("http://127.0.0.1:1/p".into(), Duration::from_secs(1)).await;
+        assert_eq!(errors.len(), 1, "one error per URL: {errors:?}");
+        assert!(errors[0].starts_with("connect: "), "{errors:?}");
+        assert!(errors[0].to_lowercase().contains("refused"), "no cause: {errors:?}");
+        assert!(!errors[0].contains("127.0.0.1"), "url in the error: {errors:?}");
+    }
+
+    #[tokio::test]
+    async fn transport_error_tells_a_timeout_from_a_refusal() {
+        // Accepts and never answers.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let errors = distinct_errors(format!("http://{addr}/p"), Duration::from_millis(50)).await;
+        assert_eq!(errors.len(), 1, "one error per URL: {errors:?}");
+        assert!(errors[0].starts_with("timeout: "), "{errors:?}");
+        assert!(!errors[0].contains("127.0.0.1"), "url in the error: {errors:?}");
     }
 
     #[tokio::test]
