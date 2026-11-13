@@ -14,7 +14,7 @@ use crate::cli::{Args, Command, ConfigSource, DEFAULT_CONFIG};
 use crate::compare;
 use crate::config::{load_config_file_with, load_config_with, Config, Protocol};
 use crate::data;
-use crate::encode::{new_encoder, MixTargeter};
+use crate::encode::{new_encoder, EncodeError, MixTargeter};
 use crate::live::Live;
 use crate::mix::WeightedMix;
 use crate::phases::{build_phases, Phase};
@@ -150,6 +150,19 @@ where
         .transpose()?;
 
     if args.validate {
+        // Build what a run builds before traffic, except the harvest probe,
+        // which needs the live service. An unset credential variable belongs
+        // to the environment, not the config, so it only warns.
+        if let Err(e) = new_encoder(&cfg) {
+            match e {
+                EncodeError::MissingEnv(var) => eprintln!(
+                    "warning: environment variable {var} is not set; a run will fail \
+                     until it is (required by target.auth)"
+                ),
+                e => return Err(e.into()),
+            }
+        }
+        data::build_pools(&cfg.data)?;
         let proto = serde_json::to_value(cfg.target.protocol)?;
         let mode = match &replay {
             Some(r) => format!("replay {}", r.summary.source),

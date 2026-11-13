@@ -59,7 +59,8 @@ in `target.auth` (read from the environment).
 | `password_env`  | string | env var holding the password (`basic`) |
 
 A required env var that is unset fails the run before any traffic, naming the
-variable.
+variable. `--validate` only warns about it, so a config can be checked where
+the secret isn't available.
 
 ```yaml
 auth:
@@ -346,7 +347,7 @@ instead.
 | key       | type   | default | notes |
 | --------- | ------ | ------- | ----- |
 | `method`  | string | `GET`   | upper-cased |
-| `path`    | string | —       | appended to `target.url`; may contain `{{pool}}` placeholders |
+| `path`    | string | —       | appended to `target.url` as written, so it must start with `/`; may contain `{{pool}}` placeholders |
 | `body`    | string | —       | request body; `{{pool}}` placeholders are rendered; sets `Content-Type: application/json` when present and none is given |
 | `headers` | map    | `{}`    | per-scenario, override the base headers for that route only; values may contain `{{pool}}` placeholders (e.g. `Idempotency-Key: "{{order_refs}}"`), rendered per request after the path and body |
 

@@ -476,6 +476,7 @@ impl Config {
                 Ok(_) => {}
             }
         }
+        check_headers("target.headers", &t.headers, &mut errs);
         // Go also checks target.protocol here; in Rust an unknown protocol
         // is rejected at parse time by the `Protocol` enum.
         let a = &t.auth;
@@ -490,6 +491,10 @@ impl Config {
                 }
                 if a.auth_type == "header" && a.header.is_empty() {
                     errs.push("target.auth.header is required for auth type header".into());
+                } else if a.auth_type == "header" {
+                    if let Err(e) = http::HeaderName::from_bytes(a.header.as_bytes()) {
+                        errs.push(format!("target.auth.header {:?}: {e}", a.header));
+                    }
                 }
             }
             "basic" => {
@@ -565,6 +570,14 @@ impl Config {
         if self.replay.is_some() && self.scenarios.iter().all(|s| s.matcher.is_none()) {
             errs.push("at least one scenario needs a match rule for replay".into());
         }
+        // What a `{{placeholder}}` can name: a pool, or a harvest extract key.
+        let pools: std::collections::HashSet<&str> = self
+            .data
+            .pools
+            .keys()
+            .chain(self.data.harvest.iter().flat_map(|h| h.extract.keys()))
+            .map(String::as_str)
+            .collect();
         let mut seen = std::collections::HashSet::new();
         for (i, s) in self.scenarios.iter().enumerate() {
             if s.name.is_empty() {
@@ -582,6 +595,8 @@ impl Config {
                     validate_match(&s.name, m, t.protocol, &mut errs);
                 }
             }
+            let ctx = format!("scenario {:?}", s.name);
+            check_headers(&format!("{ctx}: request.headers"), &s.request.headers, &mut errs);
             match t.protocol {
                 Protocol::Graphql => {
                     if s.request.query.is_empty() {
@@ -596,6 +611,12 @@ impl Config {
                             s.name
                         ));
                     }
+                    check_value_refs(
+                        &format!("{ctx}: request.variables"),
+                        &serde_json::Value::Object(s.request.variables.clone().into_iter().collect()),
+                        &pools,
+                        &mut errs,
+                    );
                 }
                 Protocol::Rest => {
                     if s.request.path.is_empty() {
@@ -603,6 +624,12 @@ impl Config {
                             "scenario {:?}: request.path is required for rest",
                             s.name
                         ));
+                    }
+                    check_rest_request(&ctx, &s.request, &mut errs);
+                    check_refs(&format!("{ctx}: request.path"), &s.request.path, &pools, &mut errs);
+                    check_refs(&format!("{ctx}: request.body"), &s.request.body, &pools, &mut errs);
+                    for (k, v) in &s.request.headers {
+                        check_refs(&format!("{ctx}: request.headers {k:?}"), v, &pools, &mut errs);
                     }
                     if !s.request.query.is_empty() || !s.request.query_file.is_empty() {
                         errs.push(format!(
@@ -660,6 +687,11 @@ impl Config {
                     "data.harvest[{i}]: request.path is required for rest"
                 ));
             }
+            let ctx = format!("data.harvest[{i}]");
+            if t.protocol == Protocol::Rest {
+                check_rest_request(&ctx, &h.request, &mut errs);
+            }
+            check_headers(&format!("{ctx}: request.headers"), &h.request.headers, &mut errs);
         }
         let s = &self.slos;
         if !(0.0..=1.0).contains(&s.success_rate) {
@@ -682,6 +714,64 @@ impl Config {
             }
         }
         errs
+    }
+}
+
+/// Header names and values as the encoders will parse them; values are not
+/// echoed, since they may be credentials.
+fn check_headers(ctx: &str, headers: &BTreeMap<String, String>, errs: &mut Vec<String>) {
+    for (k, v) in headers {
+        if let Err(e) = http::HeaderName::from_bytes(k.as_bytes()) {
+            errs.push(format!("{ctx} {k:?}: {e}"));
+        } else if let Err(e) = http::HeaderValue::from_str(v) {
+            errs.push(format!("{ctx} {k:?}: {e}"));
+        }
+    }
+}
+
+/// A REST path is appended to `target.url` as is, and the method is sent
+/// upper-cased (an empty one, in a harvest request, means GET).
+fn check_rest_request(ctx: &str, rc: &RequestConfig, errs: &mut Vec<String>) {
+    if !rc.path.is_empty() && !rc.path.starts_with('/') {
+        errs.push(format!("{ctx}: request.path must start with /"));
+    }
+    if !rc.method.is_empty() && http::Method::from_bytes(rc.method.to_ascii_uppercase().as_bytes()).is_err() {
+        errs.push(format!(
+            "{ctx}: request.method {:?} is not a valid HTTP method",
+            rc.method
+        ));
+    }
+}
+
+/// Every `{{name}}` in `s` names a known pool, scanned as
+/// `data::render_string` renders it.
+fn check_refs(ctx: &str, s: &str, pools: &std::collections::HashSet<&str>, errs: &mut Vec<String>) {
+    let mut rest = s;
+    while let Some(start) = rest.find("{{") {
+        let Some(end) = rest[start..].find("}}") else {
+            errs.push(format!("{ctx}: unterminated {{{{"));
+            return;
+        };
+        let name = rest[start + 2..start + end].trim();
+        if !pools.contains(name) {
+            errs.push(format!("{ctx}: unknown pool {name:?}"));
+        }
+        rest = &rest[start + end + 2..];
+    }
+}
+
+/// [`check_refs`] for every string inside GraphQL variables.
+fn check_value_refs(
+    ctx: &str,
+    v: &serde_json::Value,
+    pools: &std::collections::HashSet<&str>,
+    errs: &mut Vec<String>,
+) {
+    match v {
+        serde_json::Value::String(s) => check_refs(ctx, s, pools, errs),
+        serde_json::Value::Array(a) => a.iter().for_each(|v| check_value_refs(ctx, v, pools, errs)),
+        serde_json::Value::Object(m) => m.values().for_each(|v| check_value_refs(ctx, v, pools, errs)),
+        _ => {}
     }
 }
 

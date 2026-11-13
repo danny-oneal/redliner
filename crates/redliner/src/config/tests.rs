@@ -582,3 +582,73 @@ fn target_url_must_be_http_or_https() {
     assert!(t.contains("target.url \"/graphql\": relative URL without a base"), "{t}");
     load_str(&format!("target:\n  url: HTTPS://h/graphql?x=1\n{ONE_GQL}")).unwrap();
 }
+
+const REST_HEAD: &str = "target:\n  url: http://x\n  protocol: rest\n";
+
+#[test]
+fn rest_paths_must_start_with_a_slash() {
+    // Appended to target.url as is: "products/1" would request http://xproducts/1.
+    let y = format!(
+        "{REST_HEAD}data:\n  harvest:\n    - {{request: {{path: items}}, extract: {{ids: '[].id'}}}}\n\
+         scenarios:\n  - {{name: a, weight: 1, request: {{path: products/1}}}}\n"
+    );
+    let t = err_text(load_str(&y));
+    assert!(t.contains("scenario \"a\": request.path must start with /"), "{t}");
+    assert!(t.contains("data.harvest[0]: request.path must start with /"), "{t}");
+}
+
+#[test]
+fn rest_methods_must_be_valid() {
+    let y = format!(
+        "{REST_HEAD}data:\n  harvest:\n    - {{request: {{method: 'GE T', path: /i}}, extract: {{ids: '[].id'}}}}\n\
+         scenarios:\n  - {{name: a, weight: 1, request: {{method: 'G E T', path: /a}}}}\n  - {{name: b, weight: 1, request: {{method: purge, path: /b}}}}\n"
+    );
+    let t = err_text(load_str(&y));
+    assert!(t.contains("scenario \"a\": request.method \"G E T\" is not a valid HTTP method"), "{t}");
+    assert!(t.contains("data.harvest[0]: request.method \"GE T\" is not a valid HTTP method"), "{t}");
+    assert!(!t.contains("scenario \"b\""), "an extension method is fine: {t}");
+}
+
+#[test]
+fn header_names_and_values_validated() {
+    let y = "target:\n  url: http://x\n  protocol: rest\n  headers: {'Bad Header': v, X-Ok: \"a\\nb\"}\n  \
+             auth: {type: header, token_env: T, header: 'X Key'}\n\
+             data:\n  harvest:\n    - {request: {path: /i, headers: {'h(': v}}, extract: {ids: '[].id'}}\n\
+             scenarios:\n  - {name: a, weight: 1, request: {path: /a, headers: {'X:Y': v, X-Tpl: \"{{ids}}\\r\"}}}\n";
+    let t = err_text(load_str(y));
+    for want in [
+        "target.headers \"Bad Header\": invalid HTTP header name",
+        "target.headers \"X-Ok\": failed to parse header value",
+        "target.auth.header \"X Key\": invalid HTTP header name",
+        "data.harvest[0]: request.headers \"h(\": invalid HTTP header name",
+        "scenario \"a\": request.headers \"X:Y\": invalid HTTP header name",
+        "scenario \"a\": request.headers \"X-Tpl\": failed to parse header value",
+    ] {
+        assert!(t.contains(want), "{want}: {t}");
+    }
+}
+
+#[test]
+fn placeholders_must_name_a_pool() {
+    let y = format!(
+        "{GQL_HEAD}data:\n  pools:\n    ids: {{type: range, min: 1, max: 9}}\n  harvest:\n    \
+         - {{request: {{query: q}}, extract: {{skus: 'data.items[].sku'}}}}\n\
+         scenarios:\n  - {{name: a, weight: 1, request: {{query: q, variables: {{id: '{{{{ids}}}}', in: {{s: ['x-{{{{ skus }}}}', '{{{{nope}}}}']}}, b: 'a {{{{ids'}}}}}}\n"
+    );
+    let t = err_text(load_str(&y));
+    assert!(t.contains("scenario \"a\": request.variables: unknown pool \"nope\""), "{t}");
+    assert!(t.contains("scenario \"a\": request.variables: unterminated {{"), "{t}");
+    assert!(!t.contains("\"ids\"") && !t.contains("\"skus\""), "pools and harvest keys resolve: {t}");
+
+    let y = format!(
+        "{REST_HEAD}scenarios:\n  - {{name: a, weight: 1, request: {{path: '/p/{{{{p}}}}', body: '{{{{b}}}}', headers: {{X-H: '{{{{h}}}}'}}}}}}\n"
+    );
+    let t = err_text(load_str(&y));
+    for want in [
+        "scenario \"a\": request.path: unknown pool \"p\"",
+        "scenario \"a\": request.body: unknown pool \"b\"",
+        "scenario \"a\": request.headers \"X-H\": unknown pool \"h\"",
+    ] {
+        assert!(t.contains(want), "{want}: {t}");
+    }
+}

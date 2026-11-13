@@ -24,6 +24,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every `results.jsonl` line and the stderr banner. Use `target.auth` or a
   header instead. A `target.url` that isn't an `http://` or `https://` URL is
   rejected too, instead of failing every request.
+- `--validate` catches configs that would fail every request or stop the run
+  before traffic, and so does every run, before it creates a report dir: a
+  REST `path` without a leading `/`, an invalid HTTP method, an invalid header
+  name or value, a `{{placeholder}}` that names no pool or harvest `extract`
+  key, and (`--validate` now builds the pools) a missing or unreadable file
+  pool. An unset `token_env`-style variable, which fails a run, is a warning
+  under `--validate`, so configs can be checked without the secret.
 
 ## [0.5.1] - 2026-10-31
 
