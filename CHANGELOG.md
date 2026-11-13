@@ -19,6 +19,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its success rate and throughput (0% when every response was an allowed
   status) and could fail its SLOs. A report written before this fix and one
   written after it are not comparable for such a config.
+- Two runs started in the same second into the same report directory
+  (parallel CI jobs, say) no longer share one run folder and overwrite each
+  other's files: the later one gets `<timestamp>-1`, `-2`, …, and `latest`
+  points at the folder each run actually used.
 
 ## [0.5.1] - 2026-10-31
 

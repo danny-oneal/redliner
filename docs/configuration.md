@@ -427,8 +427,9 @@ and exits `1`. An interrupted run exits `130` instead.
 
 ## `report`
 
-Optional. Every run writes `report.dir/<UTC timestamp>/` and refreshes a
-`latest` symlink; see the [README](../README.md#reports) for the file list.
+Optional. Every run writes `report.dir/<UTC timestamp>/` (with `-1`, `-2`, …
+appended when another run already took that second) and refreshes a `latest`
+symlink; see the [README](../README.md#reports) for the file list.
 
 | key      | type | default   | notes |
 | -------- | ---- | --------- | ----- |

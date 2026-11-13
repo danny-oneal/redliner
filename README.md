@@ -310,7 +310,8 @@ match counts without firing traffic. See
 
 ## Reports
 
-Each run writes `reports/<UTC timestamp>/` and refreshes a `latest` symlink:
+Each run writes `reports/<UTC timestamp>/` (with `-1`, `-2`, … appended when
+another run already took that second) and refreshes a `latest` symlink:
 
 | file                  | contents |
 | --------------------- | -------- |

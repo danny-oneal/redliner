@@ -158,12 +158,26 @@ impl Collector {
 
 /// Creates `base/<UTC timestamp>/` and best-effort refreshes `base/latest`
 /// to point at it (Go `makeReportDir`). A symlink failure is swallowed.
+/// When another run already took that name, `-1`, `-2`, … is appended.
 pub fn make_report_dir(base: &str, start: SystemTime) -> std::io::Result<PathBuf> {
     let secs = start.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
     let (y, mo, d, h, mi, s) = ymd_hms(secs);
-    let name = format!("{y:04}{mo:02}{d:02}T{h:02}{mi:02}{s:02}Z");
-    let dir = Path::new(base).join(&name);
-    fs::create_dir_all(&dir)?;
+    let stamp = format!("{y:04}{mo:02}{d:02}T{h:02}{mi:02}{s:02}Z");
+    fs::create_dir_all(base)?;
+    let mut name = stamp.clone();
+    let mut dir = Path::new(base).join(&name);
+    let mut n = 0;
+    loop {
+        match fs::create_dir(&dir) {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                n += 1;
+                name = format!("{stamp}-{n}");
+                dir = Path::new(base).join(&name);
+            }
+            Err(e) => return Err(e),
+        }
+    }
 
     let link = Path::new(base).join("latest");
     let _ = fs::remove_file(&link);
@@ -683,6 +697,18 @@ mod tests {
         let text = fs::read_to_string(dir.join("text.txt")).unwrap();
         assert!(text.contains("p99.9      : 2ms\n"), "{text}");
         assert!(text.contains("status     : 2xx 1\n"), "{text}");
+    }
+
+    #[test]
+    fn runs_started_in_the_same_second_get_their_own_dirs() {
+        let base = tmp("same-second");
+        let start = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let dirs: Vec<PathBuf> = (0..3)
+            .map(|_| make_report_dir(base.to_str().unwrap(), start).unwrap())
+            .collect();
+        let names: Vec<&str> = dirs.iter().map(|d| d.file_name().unwrap().to_str().unwrap()).collect();
+        assert_eq!(names, ["20231114T221320Z", "20231114T221320Z-1", "20231114T221320Z-2"]);
+        assert_eq!(fs::read_link(base.join("latest")).unwrap(), Path::new(names[2]));
     }
 
     #[test]
