@@ -393,10 +393,13 @@ impl Config {
             if l.profile.is_empty() {
                 l.profile = "poisson".into();
             }
-            if l.rate == 0.0 && l.steps.is_empty() && l.ramp.to == 0.0 {
+            // Not for a profile that ignores them, so validation can tell a
+            // value the user set from a default.
+            let reads_rate = matches!(l.profile.as_str(), "constant" | "poisson");
+            if l.rate == 0.0 && l.steps.is_empty() && l.ramp.to == 0.0 && reads_rate {
                 l.rate = 200.0;
             }
-            if l.duration.as_std().is_zero() && l.steps.is_empty() {
+            if l.duration.as_std().is_zero() && l.steps.is_empty() && l.profile != "steps" {
                 l.duration = ConfigDuration(Duration::from_secs(30));
             }
         }
@@ -551,10 +554,22 @@ impl Config {
                         errs.push("load.ramp.from/to must be set for profile ramp \
                                    (finite, from >= 0, to > 0)".into());
                     }
+                    if l.rate != 0.0 {
+                        errs.push("load.rate (--rate) is not used by profile ramp; \
+                                   set load.ramp.from/to".into());
+                    }
                 }
                 "steps" => {
                     if l.steps.is_empty() {
                         errs.push("load.steps must be non-empty for profile steps".into());
+                    }
+                    if l.rate != 0.0 {
+                        errs.push("load.rate (--rate) is not used by profile steps; \
+                                   each step sets its rate".into());
+                    }
+                    if !l.duration.as_std().is_zero() {
+                        errs.push("load.duration (--duration) is not used by profile steps; \
+                                   each step sets its duration".into());
                     }
                     for (i, s) in l.steps.iter().enumerate() {
                         let dur = s.duration.as_std();

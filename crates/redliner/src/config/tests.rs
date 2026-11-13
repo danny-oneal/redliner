@@ -1,4 +1,5 @@
 use super::*;
+use clap::Parser;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -730,4 +731,29 @@ fn check_statuses_must_be_http_codes() {
         t.contains("checks.status must hold HTTP status codes (100-599), got 65736, -1, 99, 600"),
         "{t}"
     );
+}
+
+#[test]
+fn rate_and_duration_unused_by_the_profile_rejected() {
+    // --rate/--duration with a steps or ramp profile used to be ignored.
+    let steps = "profile: steps, steps: [{rate: 5, duration: 1s}]";
+    let t = err_text(with_load(&format!("{steps}, rate: 50, duration: 1m")));
+    assert!(t.contains("load.rate (--rate) is not used by profile steps; each step sets its rate"), "{t}");
+    assert!(
+        t.contains("load.duration (--duration) is not used by profile steps; each step sets its duration"),
+        "{t}"
+    );
+    let dir = tempdir(&format!("{GQL_HEAD}load: {{profile: ramp, ramp: {{from: 1, to: 5}}}}\n{ONE_GQL}"));
+    let t = load_config_file_with(&dir.join("c.yaml"), |c| {
+        crate::cli::Args::parse_from(["redliner", "--rate", "9", "--duration", "5s"]).apply_overrides(c)
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(t.contains("load.rate (--rate) is not used by profile ramp; set load.ramp.from/to"), "{t}");
+    assert!(!t.contains("load.duration"), "ramp runs for load.duration: {t}");
+    // Empty steps or ramp still get only their own error, not a defaulted rate's.
+    let t = err_text(with_load("profile: steps"));
+    assert!(!t.contains("load.rate") && !t.contains("load.duration ("), "{t}");
+    let t = err_text(with_load("profile: ramp"));
+    assert!(!t.contains("load.rate"), "{t}");
 }

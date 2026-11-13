@@ -170,8 +170,8 @@ one request to benchmark. `redliner compare` compares two finished runs (see
 | `--method`    | —              | method of the `--url` request (no config file only; default `GET`) |
 | `--body`      | —              | body of the `--url` request (no config file only) |
 | `-H`, `--header` | `target.headers` | `"Name: value"`, repeatable; adds to the file's headers |
-| `--rate`      | `load.rate`    | requests per second                     |
-| `--duration`  | `load.duration`| Go-style duration, e.g. `30s`, `2m`     |
+| `--rate`      | `load.rate`    | requests per second (not with `ramp` or `steps`) |
+| `--duration`  | `load.duration`| Go-style duration, e.g. `30s`, `2m` (not with `steps`) |
 | `--warmup`    | `load.warmup`  | Go-style duration                       |
 | `--seed`      | `load.seed`    | fix for a reproducible run              |
 | `--out`       | `report.dir`   |                                         |

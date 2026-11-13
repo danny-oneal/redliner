@@ -48,6 +48,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rejected instead of leaving a scenario that never fires.
 - A `checks.status` entry outside 100–599 is rejected; it used to wrap
   around (`65736` meant `200`).
+- `--rate` (or `load.rate`) with a `ramp` or `steps` profile, and
+  `--duration` (or `load.duration`) with `steps`, are errors instead of being
+  silently ignored.
 
 ## [0.5.1] - 2026-10-31
 
