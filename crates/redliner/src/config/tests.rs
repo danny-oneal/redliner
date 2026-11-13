@@ -121,6 +121,16 @@ fn unknown_key_rejected() {
 }
 
 #[test]
+fn parse_error_cause_is_printed_once() {
+    // run.rs prints the whole chain (`{e:#}`); the YAML message must not
+    // appear in both the error's Display and its source.
+    let e = load_str("targett:\n  url: http://x\n").unwrap_err();
+    let chain = format!("{:#}", anyhow::Error::from(e));
+    assert_eq!(chain.matches("unknown field `targett`").count(), 1, "{chain}");
+    assert!(chain.starts_with("parse "), "{chain}");
+}
+
+#[test]
 fn unknown_nested_key_rejected() {
     let y = format!("{GQL_HEAD}  timeoutt: 5s\n{ONE_GQL}");
     assert!(matches!(load_str(&y), Err(ConfigError::Parse { .. })));
@@ -510,6 +520,50 @@ fn replay_rejects_bad_knobs() {
         "{GQL_HEAD}replay: {{source: l.jsonl, window: {{start: '2026-01-01T00:00:00Z', end: '2026-01-02T00:00:00+01:00'}}}}\n{scen}"
     ))
     .unwrap();
+}
+
+#[test]
+fn replay_zero_speed_or_copies_rejected() {
+    // `0` must not silently become the default `1`, from YAML or a flag.
+    let scen = "scenarios:\n  - {name: a, request: {query: q}, match: {operation: a}}\n";
+    let e = err_text(load_str(&format!(
+        "{GQL_HEAD}replay: {{source: l.jsonl, speed: 0, copies: 0}}\n{scen}"
+    )));
+    assert!(e.contains("replay.speed must be > 0"), "{e}");
+    assert!(e.contains("replay.copies must be > 0"), "{e}");
+    let dir = tempdir(&format!("{GQL_HEAD}{REPLAY_GQL}"));
+    let e = load_config_file_with(&dir.join("c.yaml"), |c| {
+        let r = c.replay.as_mut().expect("replay block");
+        r.speed = 0.0;
+        r.copies = 0;
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("replay.speed must be > 0"), "{e}");
+    assert!(e.contains("replay.copies must be > 0"), "{e}");
+}
+
+#[test]
+fn replay_rejects_duplicate_match_rules() {
+    let y = format!(
+        "{GQL_HEAD}replay: {{source: l.jsonl}}\nscenarios:\n  - {{name: a, request: {{query: q}}, match: {{operation: Op}}}}\n  - {{name: b, request: {{query: q}}, match: {{operation: Op}}}}\n"
+    );
+    let e = err_text(load_str(&y));
+    assert!(
+        e.contains("scenario \"b\": same match rule as scenario \"a\"; make the match rules disjoint"),
+        "{e}"
+    );
+    let head = "target:\n  url: http://x\n  protocol: rest\nreplay: {source: l.jsonl}\nscenarios:\n";
+    let rest = |m1: &str, m2: &str| {
+        load_str(&format!(
+            "{head}  - {{name: a, request: {{path: /a}}, match: {m1}}}\n  - {{name: b, request: {{path: /a}}, match: {m2}}}\n"
+        ))
+    };
+    let e = err_text(rest("{method: GET, path: /x}", "{method: get, path: /x}"));
+    assert!(e.contains("scenario \"b\": same match rule as scenario \"a\""), "{e}");
+    // Overlapping but not identical rules are only caught against the log.
+    rest("{path: /x}", "{method: GET, path: /x}").unwrap();
+    rest("{method: GET, path: /x}", "{method: POST, path: /x}").unwrap();
 }
 
 #[test]

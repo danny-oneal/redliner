@@ -20,9 +20,7 @@ fail() {
 
 case "$(uname -s)/$(uname -m)" in
     Linux/x86_64) target=x86_64-unknown-linux-musl ;;
-    Linux/aarch64 | Linux/arm64) target=aarch64-unknown-linux-musl ;;
     Darwin/arm64) target=aarch64-apple-darwin ;;
-    Darwin/x86_64) target=x86_64-apple-darwin ;;
     *) fail "no test target for $(uname -s)/$(uname -m)" ;;
 esac
 
@@ -107,3 +105,12 @@ install_into "$work/bin4" v0.5.0 > "$work/out.txt" 2>&1 || fail "old release fai
 [ "$("$work/bin4/redliner")" = "redliner fake v0.5.0" ] || fail "old release: wrong binary installed"
 [ ! -e "$work/bin4/redliner-import" ] || fail "old release: redliner-import appeared from nowhere"
 echo "ok - installs a release without redliner-import"
+
+# 5. A version pinned without the leading `v` (REDLINER_VERSION=0.5.0) finds
+#    the v0.5.0 release.
+REDLINER_VERSION=0.5.0 \
+REDLINER_DOWNLOAD_URL="http://127.0.0.1:$port/v0.5.0" \
+REDLINER_INSTALL_DIR="$work/bin5" \
+    sh "$here/install.sh" > "$work/out.txt" 2>&1 || fail "version without v failed: $(cat "$work/out.txt")"
+[ "$("$work/bin5/redliner")" = "redliner fake v0.5.0" ] || fail "version without v: wrong binary installed"
+echo "ok - accepts a version without the leading v"

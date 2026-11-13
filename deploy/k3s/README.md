@@ -1,6 +1,6 @@
-# Running Red Liner on K3s
+# Running Redliner on K3s
 
-Run Red Liner as a one-shot Kubernetes **Job** that fires a scenario at a
+Run Redliner as a one-shot Kubernetes **Job** that fires a scenario at a
 target service and gates on SLOs via its exit code. Reports are not persisted —
 the result is the exit code plus the summary in the pod logs.
 
@@ -54,7 +54,7 @@ the gate:
 | exit | meaning |
 | ---- | ------- |
 | `0`  | run passed all SLOs |
-| `1`  | an SLO was violated |
+| `1`  | an SLO was violated, or no request succeeded (often a wrong Service DNS name) |
 | `2`  | config or runtime error |
 
 Re-run a Job after changes with:
@@ -87,6 +87,6 @@ roots, so no system CA configuration is needed in the container.
 - **Registry:** push `redliner:dev` to a registry and set a normal
   `imagePullPolicy` for multi-node clusters.
 - **Scheduled runs:** wrap the Job spec in a `CronJob`.
-- **Smaller image:** a static musl build onto `scratch` (~15 MB); deferred
-  because reqwest's rustls stack pulls `aws-lc-rs`, which needs a musl C
-  toolchain.
+- **Smaller image:** the release binaries are static (musl, rustls on `ring`
+  with bundled roots), so one copied onto `scratch` would do; this Dockerfile
+  still builds a glibc binary for distroless.

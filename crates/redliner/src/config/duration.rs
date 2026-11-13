@@ -104,7 +104,8 @@ impl<'de> Deserialize<'de> for ConfigDuration {
 
 impl Serialize for ConfigDuration {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&format!("{}ns", self.0.as_nanos()))
+        // `Debug` is exact and uses units the parser accepts (`10s`, `1.5ms`, `500µs`).
+        s.serialize_str(&format!("{:?}", self.0))
     }
 }
 
@@ -153,5 +154,27 @@ mod tests {
         let out = serde_yaml_ng::to_string(&d).unwrap();
         let back: ConfigDuration = serde_yaml_ng::from_str(&out).unwrap();
         assert_eq!(back, d);
+    }
+
+    #[test]
+    fn serializes_as_readable_text_that_parses_back() {
+        let cases = [
+            ("10s", "10s"),
+            ("1h30m", "5400s"),
+            ("1m30.5s", "90.5s"),
+            ("250ms", "250ms"),
+            ("1.5ms", "1.5ms"),
+            ("500us", "500µs"),
+            ("7ns", "7ns"),
+            ("1.000000001s", "1.000000001s"),
+            ("0", "0ns"),
+        ];
+        for (input, want) in cases {
+            let d: ConfigDuration = input.parse().unwrap();
+            let json = serde_json::to_string(&d).unwrap();
+            assert_eq!(json, format!("\"{want}\""), "input {input:?}");
+            let back: ConfigDuration = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, d, "input {input:?}");
+        }
     }
 }
