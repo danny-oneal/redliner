@@ -36,8 +36,10 @@ make run CONFIG=configs/rest-example.yaml
 make validate CONFIG=configs/rest-example.yaml
 ```
 
-CI runs `make test` and `make lint`; both must pass. Keep clippy clean —
-warnings are errors.
+CI runs `make lint`, `make test`, `cargo +1.88 check` (MSRV), `cargo package
+--workspace` (every crate publishable), `make test-install` (shellcheck +
+`scripts/install.sh` against a fake release) and `make test-release` (the
+release scripts); all must pass. Keep clippy clean — warnings are errors.
 
 ## Testing
 
