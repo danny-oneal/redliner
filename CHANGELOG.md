@@ -147,6 +147,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - GraphQL: a non-null argument with a default value is optional, as the
     spec says: a root field's defaulted argument no longer gets a pool and a
     variable, and a field with one is no longer left out of selections.
+  - An OpenAPI header parameter whose name is not a valid HTTP header name
+    (`X Trace`, say) is skipped with a note, instead of producing a draft
+    that `redliner --validate` rejects.
 
 ## [0.5.1] - 2026-10-31
 

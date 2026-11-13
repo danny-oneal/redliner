@@ -497,7 +497,9 @@ mod tests {
             request: RequestDraft::Rest {
                 method: "POST".into(),
                 path: format!("/a?q={{{{{pool}}}}}&r={odd}"),
-                headers: vec![(odd.into(), odd.into())],
+                // redliner rejects an invalid header name or value, so the
+                // header carries only a pool placeholder.
+                headers: vec![("X-Odd".into(), format!("{{{{{pool}}}}}"))],
                 body: Some(odd.into()),
             },
             commented: None,
@@ -513,7 +515,7 @@ mod tests {
         let r = &cfg.scenarios[0].request;
         assert_eq!(cfg.scenarios[0].name, odd);
         assert_eq!(r.path, format!("/a?q={{{{p}}}}&r={odd}"));
-        assert_eq!(r.headers[odd], odd);
+        assert_eq!(r.headers["X-Odd"], "{{p}}");
         assert_eq!(r.body, odd);
         assert_eq!(cfg.data.pools["p"].values, [json!(odd), json!({ odd: [odd] })]);
     }

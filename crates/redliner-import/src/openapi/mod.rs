@@ -98,6 +98,15 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
                 {
                     continue; // OpenAPI: these header parameters SHALL be ignored
                 }
+                if p.location == Location::Header
+                    && reqwest::header::HeaderName::from_bytes(p.name.as_bytes()).is_err()
+                {
+                    d.notes.push(format!(
+                        "{name}: header parameter {:?} skipped: not a valid HTTP header name",
+                        p.name
+                    ));
+                    continue;
+                }
                 if p.location == Location::Header && p.name.eq_ignore_ascii_case("authorization") {
                     d.notes.push(format!(
                         "{name}: Authorization header parameter skipped; set target.auth or pass --bearer-env"
@@ -522,5 +531,25 @@ mod tests {
         let names: Vec<&str> = rest(&d, "a").1.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(names, ["X-Trace"]);
         assert_eq!(d.pools.keys().collect::<Vec<_>>(), ["a_X_Trace"]);
+    }
+
+    #[test]
+    fn header_parameters_that_are_not_http_header_names_are_skipped() {
+        // redliner rejects such a header, so the draft would not load.
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {"/a": {"get": {
+            "operationId": "a", "parameters": [
+                {"name": "X Trace", "in": "header", "required": true, "schema": {"type": "string"}},
+                {"name": "X-Ok", "in": "header", "required": true, "schema": {"type": "string"}}
+            ]
+        }}}});
+        let d = draft(&doc, &opts(false)).unwrap();
+        let names: Vec<&str> = rest(&d, "a").1.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(names, ["X-Ok"]);
+        assert!(
+            d.notes.contains(&"a: header parameter \"X Trace\" skipped: not a valid HTTP header name".to_string()),
+            "{:?}",
+            d.notes
+        );
+        crate::testutil::assert_contract(&crate::draft::render(&d));
     }
 }
