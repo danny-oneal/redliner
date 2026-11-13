@@ -82,7 +82,11 @@ pub fn base_url(
             None => "/".to_string(),
         },
         Version::Swagger2 => {
-            let base_path = doc.get("basePath").and_then(Value::as_str).unwrap_or("");
+            // Swagger 2.0 requires a leading "/"; without it "api" joins onto the host.
+            let base_path = match doc.get("basePath").and_then(Value::as_str).unwrap_or("") {
+                p if p.is_empty() || p.starts_with('/') => p.to_string(),
+                p => format!("/{p}"),
+            };
             match doc.get("host").and_then(Value::as_str) {
                 Some(host) => {
                     let scheme = doc
@@ -95,7 +99,7 @@ pub fn base_url(
                 }
                 // Swagger 2.0: no host means the host that serves the spec.
                 None if base_path.is_empty() => "/".to_string(),
-                None => base_path.to_string(),
+                None => base_path,
             }
         }
     };
@@ -156,6 +160,7 @@ pub fn params(doc: &Value, ver: Version, path_item: &Value, op: &Value) -> Resul
 
     let mut out = Vec::new();
     for p in merged {
+        let name = p.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
         let location = match p.get("in").and_then(Value::as_str) {
             Some("path") => Location::Path,
             Some("query") => Location::Query,
@@ -163,9 +168,9 @@ pub fn params(doc: &Value, ver: Version, path_item: &Value, op: &Value) -> Resul
             Some("cookie") => Location::Cookie,
             Some("body") => continue,
             Some("formData") => return Err("uses formData parameters".into()),
-            other => return Err(format!("has a parameter in an unknown location {other:?}")),
+            Some(other) => return Err(format!("has parameter {name} in an unknown location ({other})")),
+            None => return Err(format!("has parameter {name} with no `in`")),
         };
-        let name = p.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
         let required = location == Location::Path
             || p.get("required").and_then(Value::as_bool).unwrap_or(false);
         let (values, todo) = param_values(doc, ver, p);
@@ -263,7 +268,14 @@ pub(crate) fn param_values(doc: &Value, ver: Version, p: &Value) -> (Vec<Value>,
     if let Some(values) = found {
         return (values, None);
     }
-    let ty = schema_field("type").or_else(|| p.get("type")).and_then(Value::as_str).unwrap_or("string");
+    // OpenAPI 3.1 writes a nullable type as a list: ["integer", "null"].
+    let ty = schema_field("type")
+        .or_else(|| p.get("type"))
+        .and_then(|t| match t.as_array() {
+            Some(types) => types.iter().filter_map(Value::as_str).find(|t| *t != "null"),
+            None => t.as_str(),
+        })
+        .unwrap_or("string");
     let value = match ty {
         "integer" => json!(1),
         "number" => json!(1.0),
@@ -275,31 +287,24 @@ pub(crate) fn param_values(doc: &Value, ver: Version, p: &Value) -> (Vec<Value>,
 
 /// A JSON request body example: 3.x `requestBody` JSON content's `example`,
 /// its first `examples.*.value`, or its schema's `example`; 2.0 the body
-/// parameter's schema `example`.
+/// parameter's schema `example`. A `null` example is no example.
 pub fn body_example(doc: &Value, ver: Version, op: &Value) -> Option<Value> {
+    let some = |v: Option<&Value>| v.filter(|v| !v.is_null()).cloned();
     match ver {
         Version::OpenApi3 => {
-            let body = resolve(doc, op.get("requestBody")?)?;
-            let media = body
-                .get("content")?
-                .as_object()?
-                .iter()
-                .find(|(k, _)| k.starts_with("application/json") || k.contains("+json"))
-                .map(|(_, v)| v)?;
-            media
-                .get("example")
-                .cloned()
+            let (_, media) = json_media(doc, op)?;
+            some(media.get("example"))
                 .or_else(|| {
                     media
                         .get("examples")?
                         .as_object()?
                         .values()
-                        .find_map(|e| resolve(doc, e)?.get("value").cloned())
+                        .find_map(|e| some(resolve(doc, e)?.get("value")))
                 })
                 .or_else(|| {
                     // 3.1 / JSON Schema `examples: [..]` is where FastAPI puts them.
                     let schema = resolve(doc, media.get("schema")?)?;
-                    schema.get("example").or_else(|| schema.get("examples")?.get(0)).cloned()
+                    some(schema.get("example")).or_else(|| some(schema.get("examples")?.get(0)))
                 })
         }
         Version::Swagger2 => {
@@ -309,9 +314,31 @@ pub fn body_example(doc: &Value, ver: Version, op: &Value) -> Option<Value> {
                 .iter()
                 .filter_map(|p| resolve(doc, p))
                 .find(|p| p.get("in").and_then(Value::as_str) == Some("body"))?;
-            resolve(doc, body.get("schema")?)?.get("example").cloned()
+            some(resolve(doc, body.get("schema")?)?.get("example"))
         }
     }
+}
+
+/// The 3.x request body's JSON media type and its media type object.
+fn json_media<'a>(doc: &'a Value, op: &'a Value) -> Option<(&'a str, &'a Value)> {
+    let body = resolve(doc, op.get("requestBody")?)?;
+    body.get("content")?
+        .as_object()?
+        .iter()
+        .find(|(k, _)| k.starts_with("application/json") || k.contains("+json"))
+        .map(|(k, v)| (k.as_str(), v))
+}
+
+/// The `Content-Type` a 3.x JSON body needs when it is not plain
+/// `application/json` (which redliner sends by default), e.g.
+/// `application/vnd.api+json`.
+pub fn body_content_type(doc: &Value, ver: Version, op: &Value) -> Option<String> {
+    let (media, _) = match ver {
+        Version::OpenApi3 => json_media(doc, op)?,
+        Version::Swagger2 => return None,
+    };
+    let essence = media.split(';').next().unwrap_or(media).trim();
+    (!essence.eq_ignore_ascii_case("application/json")).then(|| media.to_string())
 }
 
 #[cfg(test)]
@@ -404,6 +431,15 @@ mod tests {
     }
 
     #[test]
+    fn swagger2_base_path_without_a_leading_slash() {
+        let doc = json!({"swagger": "2.0", "host": "api.example.com", "basePath": "api"});
+        assert_eq!(base_url(&doc, Version::Swagger2, None, None).unwrap(), "https://api.example.com/api");
+        let no_host = json!({"swagger": "2.0", "basePath": "api"});
+        let spec = reqwest::Url::parse("http://h/docs/swagger.json").unwrap();
+        assert_eq!(base_url(&no_host, Version::Swagger2, Some(&spec), None).unwrap(), "http://h/api");
+    }
+
+    #[test]
     fn relative_server_needs_spec_url_or_override() {
         let doc = json!({"openapi": "3.0.0", "servers": [{"url": "/v1"}]});
         let v3 = Version::OpenApi3;
@@ -469,6 +505,8 @@ mod tests {
             (V3, &empty, json!({"schema": {"type": "boolean"}}), json!([true]), Some("boolean")),
             (V3, &empty, json!({"schema": {"type": "string", "format": "uuid"}}), json!(["TODO"]), Some("string")),
             (V3, &empty, json!({}), json!(["TODO"]), Some("string")),
+            // OpenAPI 3.1: a nullable type is a list.
+            (V3, &empty, json!({"schema": {"type": ["null", "integer"]}}), json!([1]), Some("integer")),
         ];
         for (ver, doc, p, want, todo) in rows {
             let (values, got_todo) = param_values(doc, ver, &p);
@@ -507,6 +545,45 @@ mod tests {
             Some(json!({"name": "Rex"}))
         );
         assert_eq!(body_example(&doc3, v3, &doc3["paths"]["/pets/{petId}"]["get"]), None);
+    }
+
+    #[test]
+    fn a_null_body_example_falls_through() {
+        let v3 = Version::OpenApi3;
+        let op = json!({"requestBody": {"content": {"application/json": {
+            "example": null, "examples": {"a": {"value": null}}, "schema": {"example": {"b": 2}}}}}});
+        assert_eq!(body_example(&json!({}), v3, &op), Some(json!({"b": 2})));
+        let op = json!({"requestBody": {"content": {"application/json": {"schema": {"example": null}}}}});
+        assert_eq!(body_example(&json!({}), v3, &op), None);
+        let op = json!({"parameters": [{"in": "body", "schema": {"example": null}}]});
+        assert_eq!(body_example(&json!({}), Version::Swagger2, &op), None);
+    }
+
+    #[test]
+    fn body_content_type_only_when_not_plain_json() {
+        let v3 = Version::OpenApi3;
+        let op = |media: &str| json!({"requestBody": {"content": {media: {"example": {}}}}});
+        assert_eq!(body_content_type(&json!({}), v3, &op("application/json")), None);
+        assert_eq!(body_content_type(&json!({}), v3, &op("application/json; charset=utf-8")), None);
+        assert_eq!(
+            body_content_type(&json!({}), v3, &op("application/vnd.api+json")).as_deref(),
+            Some("application/vnd.api+json")
+        );
+        assert_eq!(body_content_type(&json!({}), v3, &json!({})), None);
+    }
+
+    #[test]
+    fn a_parameter_without_a_known_location_is_named() {
+        let op = |p: serde_json::Value| json!({"parameters": [p]});
+        let v3 = Version::OpenApi3;
+        assert_eq!(
+            params(&json!({}), v3, &json!({}), &op(json!({"name": "id"}))).unwrap_err(),
+            "has parameter id with no `in`"
+        );
+        assert_eq!(
+            params(&json!({}), v3, &json!({}), &op(json!({"name": "id", "in": "matrix"}))).unwrap_err(),
+            "has parameter id in an unknown location (matrix)"
+        );
     }
 
     #[test]

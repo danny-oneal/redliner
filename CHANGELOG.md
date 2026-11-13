@@ -36,6 +36,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     document".
   - An operation or path item with its own `servers` gets a note naming the
     server, instead of silently firing at `target.url`.
+  - OpenAPI edge cases: a Swagger 2.0 `basePath` without a leading `/` no
+    longer runs into the host (`https://api.example.comapi`); an `example:
+    null` body falls through to the schema's example instead of sending
+    `null`; an OpenAPI 3.1 nullable type (`type: [integer, "null"]`) gets a
+    typed placeholder; a path parameter declared in another case (`PetId`
+    for `{petId}`) keeps its example instead of a TODO; a `+json` body
+    (`application/vnd.api+json`) gets that `Content-Type` instead of
+    `application/json`; a body example written as a JSON string is sent as
+    that JSON, not as a string literal; a skipped operation's note names a
+    parameter with no `in` instead of printing `None`.
 
 ## [0.5.1] - 2026-10-31
 
