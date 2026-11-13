@@ -23,6 +23,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (parallel CI jobs, say) no longer share one run folder and overwrite each
   other's files: the later one gets `<timestamp>-1`, `-2`, …, and `latest`
   points at the folder each run actually used.
+- Every `results.jsonl` record now carries its `phase` and its send time
+  (`timestamp_ns`, Unix nanoseconds), so the stream can be plotted over time;
+  `seq` restarts every phase, so it alone could not order or place a hit.
 
 ## [0.5.1] - 2026-10-31
 

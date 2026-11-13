@@ -120,7 +120,7 @@ impl Collector {
     /// what counts as a success in every one of those views.
     pub fn add(&mut self, r: &AttackResult, ok: bool, phase: &str, op: Option<&str>) {
         if let Some(w) = self.raw.as_mut() {
-            if let Ok(line) = serde_json::to_string(&RawRecord::from(r)) {
+            if let Ok(line) = serde_json::to_string(&RawRecord::from(r, phase)) {
                 let _ = writeln!(w, "{line}");
             }
         }
@@ -400,7 +400,10 @@ pub fn utc_rfc3339(t: SystemTime) -> String {
 
 #[derive(Serialize)]
 struct RawRecord {
+    phase: String,
     seq: u64,
+    /// When the request was sent, in nanoseconds since the Unix epoch.
+    timestamp_ns: u64,
     code: u16,
     latency_ns: u64,
     bytes_in: u64,
@@ -412,9 +415,12 @@ struct RawRecord {
 }
 
 impl RawRecord {
-    fn from(r: &AttackResult) -> Self {
+    fn from(r: &AttackResult, phase: &str) -> Self {
+        let since_epoch = r.timestamp.duration_since(UNIX_EPOCH).unwrap_or_default();
         Self {
+            phase: phase.to_string(),
             seq: r.seq,
+            timestamp_ns: u64::try_from(since_epoch.as_nanos()).unwrap_or(u64::MAX),
             code: r.code,
             latency_ns: u64::try_from(r.latency.as_nanos()).unwrap_or(u64::MAX),
             bytes_in: r.bytes_in,
@@ -770,6 +776,17 @@ mod tests {
         let last: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
         assert_eq!(last["seq"], 2);
         assert_eq!(last["code"], 200);
+
+        // Each record names its phase and when it was sent, so the stream
+        // can be plotted over time (seq restarts every phase).
+        let mut r = res(200, 1, "http://h/a");
+        r.timestamp = UNIX_EPOCH + Duration::from_nanos(1_700_000_000_123_456_789);
+        let mut c = Collector::new(Some(&path)).unwrap();
+        c.add(&r, true, "ramp", Some("A"));
+        c.close();
+        let rec: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(rec["phase"], "ramp");
+        assert_eq!(rec["timestamp_ns"], 1_700_000_000_123_456_789u64);
 
         let none_dir = tmp("noraw");
         let _ = Collector::new(None).unwrap();
