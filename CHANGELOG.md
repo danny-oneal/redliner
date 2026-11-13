@@ -40,6 +40,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   connection, and every distinct URL added one more "distinct" error to
   the summary and `metrics.json` (millions on a long run against a target
   that went down). The list of distinct errors is also capped at 1000.
+- Above ~1000 rps, hits are spaced evenly instead of fired in 1 ms bursts
+  (at 5000 rps ~80% of hits went out within 50 µs of the previous one).
+  The scheduler sleeps to within a millisecond of each hit and spins the
+  rest, so such rates keep up to one core busy.
 
 ## [0.5.1] - 2026-10-31
 

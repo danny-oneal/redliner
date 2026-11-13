@@ -141,7 +141,7 @@ impl Attacker {
                         break;
                     }
                     tokio::select! {
-                        _ = tokio::time::sleep(wait) => continue,
+                        _ = sleep_until(start + elapsed + wait) => continue,
                         _ = stopped(&mut stop) => break,
                     }
                 }
@@ -187,6 +187,23 @@ impl Attacker {
         });
 
         rx
+    }
+}
+
+/// How long before a hit is due the scheduler stops sleeping and spins.
+const SPIN: Duration = Duration::from_millis(1);
+
+/// Waits until `due`. tokio's timer ticks in milliseconds, so sleeping the
+/// whole wait would round it up to the next tick and fire hits less than a
+/// millisecond apart as 1ms bursts. The timer sleeps to within [`SPIN`] of
+/// `due` and the rest is spun, yielding to other tasks; above ~1000 rps that
+/// keeps up to one core busy.
+async fn sleep_until(due: Instant) {
+    if due.saturating_duration_since(Instant::now()) > SPIN {
+        tokio::time::sleep_until((due - SPIN).into()).await;
+    }
+    while Instant::now() < due {
+        tokio::task::yield_now().await;
     }
 }
 
@@ -702,6 +719,60 @@ mod tests {
             }
             Err(Error::Build("no target".into()))
         }
+    }
+
+    /// Fails every hit before any I/O.
+    struct NoTarget;
+
+    impl Targeter for NoTarget {
+        fn target(&self, _seq: u64, _t: &mut Target) -> Result<(), Error> {
+            Err(Error::Build("no target".into()))
+        }
+    }
+
+    /// Wraps a pacer, recording when each hit was released (a zero wait).
+    struct Recording<P> {
+        inner: P,
+        fired: std::sync::Mutex<Vec<Duration>>,
+    }
+
+    impl<P: Pacer> Pacer for Recording<P> {
+        fn pace(&self, elapsed: Duration, hits: u64) -> (Duration, bool) {
+            let (wait, stop) = self.inner.pace(elapsed, hits);
+            if wait.is_zero() && !stop {
+                self.fired.lock().unwrap().push(elapsed);
+            }
+            (wait, stop)
+        }
+
+        fn rate(&self, elapsed: Duration) -> f64 {
+            self.inner.rate(elapsed)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn attack_spaces_hits_finer_than_the_timer_tick() {
+        // 5000 rps: a hit every 200µs, five per tokio timer tick (1ms).
+        let pacer = Arc::new(Recording {
+            inner: ConstantPacer { freq: 5000, per: Duration::from_secs(1) },
+            fired: std::sync::Mutex::new(Vec::new()),
+        });
+        let attacker = Attacker::new(cfg(Duration::from_secs(5))).unwrap();
+        let mut rx = attacker.attack(
+            Arc::new(NoTarget),
+            pacer.clone(),
+            Duration::from_millis(500),
+            "spin".to_string(),
+        );
+        while rx.recv().await.is_some() {}
+
+        let fired = pacer.fired.lock().unwrap().clone();
+        let gaps: Vec<Duration> = fired.windows(2).map(|w| w[1] - w[0]).collect();
+        let bursts = gaps.iter().filter(|&&g| g < Duration::from_micros(50)).count();
+        let share = bursts as f64 / gaps.len() as f64;
+        // Sleeping to the tick fires them as 1ms bursts: ~80% of the gaps are
+        // within a burst. A preempted scheduler still catches up in a burst.
+        assert!(share < 0.25, "{:.0}% of {} gaps within a burst", share * 100.0, gaps.len());
     }
 
     /// Fires three hits at once, then stops.

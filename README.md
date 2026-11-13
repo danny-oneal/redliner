@@ -28,7 +28,10 @@ binary (`redliner`).
   fail fast.
 - **GraphQL and REST** behind one encoder seam — switch with `target.protocol`.
 - **Pacing profiles:** `constant`, `poisson` (seeded, self-correcting),
-  `ramp`, and `steps` (to find the throughput knee).
+  `ramp`, and `steps` (to find the throughput knee). Hits are spaced to the
+  microsecond rather than to the 1 ms timer tick: the last millisecond
+  before each hit is spun, so firing faster than ~1000 rps keeps up to one
+  core busy.
 - **Data pools & templating:** `{{pool}}` placeholders in paths, bodies, REST
   scenario headers, and GraphQL variables, sampled from `list` / `range` / `file` pools or values
   **harvested** from the live service by JSON path. `uuid`, `sequence` and
