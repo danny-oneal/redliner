@@ -434,7 +434,7 @@ fn print_summary(
     writeln!(out)?;
     writeln!(out, "==== redliner summary ====")?;
     if interrupted {
-        writeln!(out, "status        : INTERRUPTED (partial results)")?;
+        writeln!(out, "run           : INTERRUPTED (partial results)")?;
     }
     writeln!(out, "elapsed       : {}", fmt_dur(elapsed))?;
     writeln!(out, "requests      : {}", m.requests)?;
@@ -506,6 +506,18 @@ fn redline_banner() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interrupted_summary_labels_each_line_once() {
+        let mut out = Vec::new();
+        let m = Metrics::new();
+        print_summary(&mut out, true, &m, &BTreeMap::new(), None, &[], Duration::ZERO, Path::new("r"))
+            .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("\nrun           : INTERRUPTED (partial results)\n"), "{text}");
+        let status: Vec<&str> = text.lines().filter(|l| l.starts_with("status ")).collect();
+        assert_eq!(status, ["status        : none"], "{text}");
+    }
 
     #[test]
     fn redline_banner_marks_the_red() {

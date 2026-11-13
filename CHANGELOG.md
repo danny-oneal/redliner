@@ -36,6 +36,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A run whose stdout is closed before the summary is printed
   (`redliner ... | head -1`) no longer panics with exit code 101; it exits
   with its verdict (0, 1 or 130).
+- An interrupted run's summary labels its first line `run           :
+  INTERRUPTED (partial results)`; it shared the `status        :` label with
+  the status-class line, so a script matching that label read the wrong one.
 
 ## [0.5.1] - 2026-10-31
 
