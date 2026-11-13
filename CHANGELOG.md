@@ -28,6 +28,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Replay: a JSONL epoch timestamp logged as a quoted string
   (`"ts":"1760968800"`, as nginx `$msec` writes it) is read as the number
   instead of making the line malformed.
+- Replay reads a JSONL log line by line instead of loading the whole file
+  first, so peak memory no longer includes a copy of the raw log (a 132 MB
+  log: about 300 MB to 220 MB).
 
 ## [0.5.1] - 2026-10-31
 

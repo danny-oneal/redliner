@@ -1,6 +1,8 @@
 //! Reads a production request log (JSON lines or HAR) into a time-ordered
 //! list of events. Parsing only: matching and scheduling live elsewhere.
 
+use std::io::{BufRead, BufReader};
+
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
@@ -44,6 +46,24 @@ impl Trace {
         }
     }
 
+    /// One JSONL line without its `\n`. Blank lines are skipped and not
+    /// counted; a line that is not valid UTF-8 is malformed.
+    fn push_jsonl_line(&mut self, line: usize, raw: &[u8], fields: &ReplayFields) {
+        // Tolerate CRLF by dropping a single trailing '\r'.
+        let raw = match raw.split_last() {
+            Some((b'\r', head)) => head,
+            _ => raw,
+        };
+        match std::str::from_utf8(raw) {
+            Ok(s) if s.trim().is_empty() => {}
+            Ok(s) => match jsonl_event(s, line, fields) {
+                Ok(ev) => self.events.push(ev),
+                Err(reason) => self.reject(line, &reason),
+            },
+            Err(_) => self.reject(line, "invalid UTF-8"),
+        }
+    }
+
     fn finish(mut self) -> Self {
         self.events.sort_by_key(|e| e.at); // stable: ties keep log order
         self
@@ -56,14 +76,19 @@ pub fn read_trace(cfg: &ReplayConfig) -> Result<Trace, ReplayError> {
         path: cfg.source.clone().into(),
         source,
     };
-    // JSONL is read as bytes so one invalid-UTF-8 line is a malformed line,
-    // not a fatal whole-file error. HAR is a single JSON document.
+    // JSONL is read line by line as bytes, so one invalid-UTF-8 line is a
+    // malformed line, not a fatal whole-file error, and the raw file is never
+    // held in memory whole. HAR is a single JSON document.
     let mut trace = if cfg.format == "har" {
         let text = std::fs::read_to_string(&cfg.source).map_err(io_err)?;
         parse_har(&text)?
     } else {
-        let bytes = std::fs::read(&cfg.source).map_err(io_err)?;
-        parse_jsonl_bytes(&bytes, &cfg.fields)
+        let file = std::fs::File::open(&cfg.source).map_err(io_err)?;
+        let mut trace = Trace::default();
+        for (i, raw) in BufReader::new(file).split(b'\n').enumerate() {
+            trace.push_jsonl_line(i + 1, &raw.map_err(io_err)?, &cfg.fields);
+        }
+        trace.finish()
     };
     if let Some(w) = &cfg.window {
         apply_window(&mut trace, w)?;
@@ -76,20 +101,7 @@ pub fn read_trace(cfg: &ReplayConfig) -> Result<Trace, ReplayError> {
 pub fn parse_jsonl_bytes(bytes: &[u8], fields: &ReplayFields) -> Trace {
     let mut trace = Trace::default();
     for (i, raw) in bytes.split(|&b| b == b'\n').enumerate() {
-        let line = i + 1;
-        // Tolerate CRLF by dropping a single trailing '\r'.
-        let raw = match raw.split_last() {
-            Some((b'\r', head)) => head,
-            _ => raw,
-        };
-        match std::str::from_utf8(raw) {
-            Ok(s) if s.trim().is_empty() => continue,
-            Ok(s) => match jsonl_event(s, line, fields) {
-                Ok(ev) => trace.events.push(ev),
-                Err(reason) => trace.reject(line, &reason),
-            },
-            Err(_) => trace.reject(line, "invalid UTF-8"),
-        }
+        trace.push_jsonl_line(i + 1, raw, fields);
     }
     trace.finish()
 }
