@@ -110,7 +110,10 @@ fn apply_extract(
     pools: &mut Pools,
 ) -> Result<(), DataError> {
     for (pool, path) in extract {
-        let vals = extract_path(doc, path)?;
+        let vals = extract_path(doc, path).map_err(|e| DataError::Pool {
+            name: pool.clone(),
+            source: Box::new(e),
+        })?;
         if vals.is_empty() {
             return Err(DataError::EmptyMatch {
                 pool: pool.clone(),
@@ -168,6 +171,17 @@ mod tests {
         let err = apply_extract(&doc, &extract("ids", "data.items[].id"), &mut pools).unwrap_err();
         assert!(matches!(err, DataError::EmptyMatch { .. }), "{err:?}");
         assert!(pools.is_empty());
+    }
+
+    #[test]
+    fn extract_errors_name_the_pool() {
+        let mut pools = Pools::new();
+        let doc = json!({"items": 5});
+        let err = apply_extract(&doc, &extract("skus", "items[].sku"), &mut pools).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "pool \"skus\": path \"items[].sku\": segment \"items[]\": expected array, got number"
+        );
     }
 
     #[test]

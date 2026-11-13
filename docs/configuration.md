@@ -306,8 +306,10 @@ exist.
 
 A list of probe requests run once, before the attack. Each extracts values by
 JSON path and appends them into the named pools (creating a pool, or adding to
-an existing one). A path segment ending in `[]` fans out across an array. If a
-path matches nothing, the run fails with the pool and path named.
+an existing one). A path segment ending in `[]` fans out across an array, and a
+bare `[]` fans out across the response itself when it is a top-level array
+(`"[].sku"`). If a path matches nothing, or doesn't fit the response, the run
+fails with the pool and path named.
 
 ```yaml
 data:

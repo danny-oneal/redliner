@@ -31,6 +31,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   key, and (`--validate` now builds the pools) a missing or unreadable file
   pool. An unset `token_env`-style variable, which fails a run, is a warning
   under `--validate`, so configs can be checked without the secret.
+- Harvest can extract from a response that is a top-level JSON array
+  (`extract: { skus: "[].sku" }`), as the docs said `[]` would. A path that
+  doesn't fit the response now names its pool in the error.
 
 ## [0.5.1] - 2026-10-31
 
