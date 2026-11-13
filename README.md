@@ -61,7 +61,7 @@ to `~/.local/bin`:
 curl -fsSL https://raw.githubusercontent.com/danny-oneal/redliner/main/scripts/install.sh | sh
 ```
 
-Set `REDLINER_VERSION=v0.2.0` to pin a release or `REDLINER_INSTALL_DIR` to
+Set `REDLINER_VERSION=vX.Y.Z` to pin a release or `REDLINER_INSTALL_DIR` to
 install elsewhere. The Linux binaries are static (musl), so they run on any
 distro and in `scratch`/distroless images. Windows builds are attached to each
 [release](https://github.com/danny-oneal/redliner/releases) as a `.zip` with a
@@ -246,7 +246,7 @@ locally and in CI.
 `redliner-import` drafts a config from what the service already describes:
 one scenario per GraphQL Query field (via live introspection), or one per
 OpenAPI 3.x / Swagger 2.0 operation. It only writes YAML; it never fires load.
-From v0.5.1 it ships next to `redliner` in every release archive, the
+Since v0.5.1 it ships next to `redliner` in every release archive, the
 [install script](#install) and the Docker image
 (`docker run --entrypoint redliner-import <image> …`):
 
