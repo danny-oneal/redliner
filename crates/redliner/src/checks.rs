@@ -91,7 +91,8 @@ impl Checker {
 
 /// Message of the first entry of a non-empty top-level `errors` array, or
 /// `None` when there is no such array (Go `errsPresent` + `firstGraphQLError`).
-fn first_graphql_error(doc: &Value) -> Option<String> {
+/// Shared with the harvest probe.
+pub(crate) fn first_graphql_error(doc: &Value) -> Option<String> {
     let first = doc.get("errors")?.as_array()?.first()?;
     Some(
         first
@@ -182,6 +183,15 @@ mod tests {
         default.apply(&mut res(0, b"", Some("connection refused")));
         default.apply(&mut res(200, br#"{"errors":[{"message":"boom"}]}"#, None));
         assert_eq!(default.accepted(), 1);
+    }
+
+    #[test]
+    fn graphql_errors_detected() {
+        let first = |doc: Value| first_graphql_error(&doc);
+        assert_eq!(first(serde_json::json!({"errors":[{"message":"boom"}]})).as_deref(), Some("boom"));
+        assert_eq!(first(serde_json::json!({"errors":[{"code":1}]})).as_deref(), Some("unknown error shape"));
+        assert!(first(serde_json::json!({"errors":[]})).is_none());
+        assert!(first(serde_json::json!({"data":{}})).is_none());
     }
 
     #[test]
