@@ -46,6 +46,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `target.max_idle_conns` is rejected; it used to turn connection pooling off.
 - A `weight` of `.nan` or `.inf`, or weights whose total overflows, is
   rejected instead of leaving a scenario that never fires.
+- A `checks.status` entry outside 100–599 is rejected; it used to wrap
+  around (`65736` meant `200`).
 
 ## [0.5.1] - 2026-10-31
 

@@ -752,6 +752,19 @@ impl Config {
             }
             check_headers(&format!("{ctx}: request.headers"), &h.request.headers, &mut errs);
         }
+        let bad: Vec<String> = self
+            .checks
+            .statuses
+            .iter()
+            .filter(|s| !(100..=599).contains(*s))
+            .map(i64::to_string)
+            .collect();
+        if !bad.is_empty() {
+            errs.push(format!(
+                "checks.status must hold HTTP status codes (100-599), got {}",
+                bad.join(", ")
+            ));
+        }
         let s = &self.slos;
         if !(0.0..=1.0).contains(&s.success_rate) {
             errs.push(format!(

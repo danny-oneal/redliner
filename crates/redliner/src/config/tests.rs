@@ -720,3 +720,14 @@ fn weights_must_be_positive_and_finite() {
     let t = err_text(load_str(&y));
     assert!(t.contains("scenarios: the total weight overflows; use smaller weights"), "{t}");
 }
+
+#[test]
+fn check_statuses_must_be_http_codes() {
+    // They were truncated `as u16`: 65736 meant 200 and -1 meant 65535.
+    let y = format!("{GQL_HEAD}checks: {{status: [200, 65736, -1, 99, 600, 599, 100]}}\n{ONE_GQL}");
+    let t = err_text(load_str(&y));
+    assert!(
+        t.contains("checks.status must hold HTTP status codes (100-599), got 65736, -1, 99, 600"),
+        "{t}"
+    );
+}
