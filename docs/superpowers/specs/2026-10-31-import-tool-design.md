@@ -89,8 +89,8 @@ writes `target.auth: {type: bearer, token_env: VAR}`.
 - One scenario per non-deprecated Query-root field, named after the field. Its
   query is a **named operation with the same name** (`query product($id: Int!)
   { ... }`), because the encoder sends `operationName` = scenario name.
-- Required arguments (outer `NON_NULL`) become variables bound to
-  `{{<field>_<arg>}}`; optional arguments are omitted.
+- Required arguments (outer `NON_NULL`, no `defaultValue`) become variables
+  bound to `{{<field>_<arg>}}`; optional arguments are omitted.
 - Selection set: scalar and enum fields; object, interface and union fields
   descend while depth allows (`--max-depth`, default 3, counting the root
   field's return type as level 1); never re-enter a type already on the path;

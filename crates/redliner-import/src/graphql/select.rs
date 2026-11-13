@@ -23,7 +23,7 @@ fn select(schema: &Schema, type_name: &str, depth: usize, path: &mut Vec<String>
         Kind::Object => Vec::new(),
     };
     for f in &def.fields {
-        if f.args.iter().any(|a| a.ty.is_required()) {
+        if f.args.iter().any(|a| a.is_required()) {
             continue;
         }
         let target = f.ty.named();
@@ -108,7 +108,7 @@ mod tests {
                 kind: Kind::Object,
                 fields: vec![Field {
                     name: "secret".into(),
-                    args: vec![Arg { name: "key".into(), ty: TypeRef::NonNull(Box::new(string.clone())) }],
+                    args: vec![Arg { name: "key".into(), ty: TypeRef::NonNull(Box::new(string.clone())), has_default: false }],
                     ty: string,
                 }],
                 enum_values: vec![],

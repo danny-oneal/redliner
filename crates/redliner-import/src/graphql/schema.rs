@@ -45,6 +45,15 @@ pub struct Field {
 pub struct Arg {
     pub name: String,
     pub ty: TypeRef,
+    /// Whether the argument declares a `defaultValue`.
+    pub has_default: bool,
+}
+
+impl Arg {
+    /// Whether a call must pass it: non-null with no default.
+    pub fn is_required(&self) -> bool {
+        self.ty.is_required() && !self.has_default
+    }
 }
 
 /// A type reference: a named type wrapped in lists and non-nulls.
@@ -156,7 +165,8 @@ fn field(owner: &str, v: &Value) -> Result<Field, ImportError> {
             .iter()
             .map(|a| {
                 let arg = text(a, "name")?;
-                Ok(Arg { ty: type_ref(&a["type"], &format!("{at}({arg})"))?, name: arg })
+                let has_default = a.get("defaultValue").is_some_and(|d| !d.is_null());
+                Ok(Arg { ty: type_ref(&a["type"], &format!("{at}({arg})"))?, name: arg, has_default })
             })
             .collect::<Result<Vec<_>, ImportError>>()?,
         None => Vec::new(),

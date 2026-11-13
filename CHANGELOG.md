@@ -112,6 +112,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - GraphQL: a type wrapped in 8 lists and non-nulls (`[[[[Int]!]!]!]!`)
     is read (7 before), and a deeper one's error names its field
     (`Query.matrix: LIST type without ofType …`) instead of naming nothing.
+  - GraphQL: a non-null argument with a default value is optional, as the
+    spec says: a root field's defaulted argument no longer gets a pool and a
+    variable, and a field with one is no longer left out of selections.
 
 ## [0.5.1] - 2026-10-31
 
