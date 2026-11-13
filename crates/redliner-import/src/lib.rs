@@ -37,7 +37,15 @@ pub async fn run(cli: Cli, stdout: &mut impl std::io::Write) -> Result<Summary, 
         Command::Graphql(a) => {
             let f = Fetcher::new(&fetch_opts(&a.common))?;
             let schema = graphql::fetch_schema(&f, &a.url).await?;
-            let mut d = graphql::draft(&schema, &scrub(&a.url, true), a.max_depth as usize)?;
+            let url = scrub(&a.url, false);
+            let mut d = graphql::draft(&schema, &url, a.max_depth as usize)?;
+            if url != scrub(&a.url, true) {
+                d.notes.push(
+                    "the endpoint URL's query string was not written; set target.headers or target.auth \
+                     for credentials"
+                        .into(),
+                );
+            }
             d.target_url = a.url.clone(); // scrubbed below, with a note if it had credentials
             (d, a.common)
         }
@@ -68,9 +76,13 @@ pub async fn run(cli: Cli, stdout: &mut impl std::io::Write) -> Result<Summary, 
     };
     let target = scrub(&d.target_url, true);
     if target != d.target_url {
-        d.target_url = target;
         d.notes.push("the URL's user:password was not written; set target.auth (type: basic) to authenticate".into());
     }
+    // A GraphQL endpoint's query can carry a credential (?api_key=…).
+    d.target_url = match d.protocol {
+        draft::Protocol::Graphql => scrub(&target, false),
+        draft::Protocol::Rest => target,
+    };
     d.insecure_tls = common.insecure;
     d.bearer_env = common.bearer_env.clone();
     d.header_names = common.header.iter().map(|(k, _)| k.clone()).collect();
@@ -254,6 +266,18 @@ mod tests {
         assert!(!yaml.contains("bob:") && !yaml.contains("s3cret"), "{yaml}");
         assert!(yaml.contains("user:password was not written"), "{yaml}");
         assert_eq!(assert_contract(&yaml).target.url, format!("{}/graphql", g.url));
+    }
+
+    #[tokio::test]
+    async fn a_graphql_endpoints_query_is_never_written() {
+        let g = spawn_mock(200, "application/json", INTROSPECTION_JSON.to_string()).await;
+        let (r, yaml) = run_args(&["graphql", &format!("{}/graphql?api_key=SECRETKEY#f", g.url)]).await;
+        r.unwrap();
+        assert!(!yaml.contains("SECRETKEY"), "{yaml}");
+        assert!(yaml.contains("query string was not written"), "{yaml}");
+        assert_eq!(assert_contract(&yaml).target.url, format!("{}/graphql", g.url));
+        // The schema is still fetched from the URL as given.
+        assert!(g.requests.lock().unwrap()[0].starts_with("POST /graphql?api_key=SECRETKEY "));
     }
 
     #[tokio::test]
