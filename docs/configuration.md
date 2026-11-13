@@ -277,7 +277,7 @@ Each pool is keyed by name. `type` selects the source:
 data:
   pools:
     ids:          { type: range, min: 1, max: 1000 }
-    country_codes:{ type: list,  values: [US, CA] }
+    country_codes: { type: list,  values: [US, CA] }
     skus:         { type: file,  path: skus.txt, as: string }
     order_refs:   { type: uuid }
     order_no:     { type: sequence, start: 1000 }
@@ -308,6 +308,10 @@ JSON path and appends them into the named pools (creating a pool, or adding to
 an existing one). A path segment ending in `[]` fans out across an array. If a
 path matches nothing, the run fails with the pool and path named.
 
+In a flow mapping (`{ ... }`) a path containing `[]` must be quoted, as in
+`extract: { skus: "items[].sku" }`, or YAML fails to parse it; block style,
+as below, needs no quotes.
+
 ```yaml
 data:
   harvest:
@@ -317,7 +321,7 @@ data:
         skus: data.country.products[].sku
     # REST form:
     # - request: { method: GET, path: /products?limit=100 }
-    #   extract: { skus: items[].sku }
+    #   extract: { skus: "items[].sku" }
 ```
 
 ## `scenarios`
@@ -404,7 +408,7 @@ genuine transport error is never masked.
 | key              | type       | default | notes |
 | ---------------- | ---------- | ------- | ----- |
 | `status`         | list[int]  | `[]`    | allowed HTTP statuses; empty means the default 2xx/3xx |
-| `graphql_errors` | bool       | `true` for GraphQL, `false` for REST | a `200` carrying a non-empty top-level `errors` array counts as a failure |
+| `graphql_errors` | bool       | `true` for GraphQL, `false` for REST | a 2xx/3xx response carrying a non-empty top-level `errors` array counts as a failure |
 
 ## `slos`
 

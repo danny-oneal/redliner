@@ -19,6 +19,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its success rate and throughput (0% when every response was an allowed
   status) and could fail its SLOs. A report written before this fix and one
   written after it are not comparable for such a config.
+- Docs: the README's minimal config and two `docs/configuration.md` examples
+  (the `data.pools` block and the REST harvest form) now parse. A harvest
+  path containing `[]` must be quoted inside `{ ... }`.
+- `scripts/install.sh` accepts `REDLINER_VERSION` without the leading `v`
+  (`0.5.0` as well as `v0.5.0`) instead of failing with a 404.
 
 ## [0.5.1] - 2026-10-31
 
