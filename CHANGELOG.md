@@ -29,6 +29,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `run_manifest.json` writes config durations as text the config accepts
   back (`"timeout": "10s"`, `"5400s"`, `"1.5ms"`) instead of raw
   nanoseconds (`"10000000000ns"`).
+- Error messages print each cause once: a YAML parse error no longer repeats
+  the parser's message, and a missing pool file reads `pool "ids": read
+  ids.txt: No such file or directory` instead of naming no path and repeating
+  the OS error three times.
 
 ## [0.5.1] - 2026-10-31
 

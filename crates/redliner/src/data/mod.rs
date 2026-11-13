@@ -18,15 +18,19 @@ pub mod harvest;
 /// Build-time failures while resolving pools or extracting values.
 #[derive(Debug, thiserror::Error)]
 pub enum DataError {
-    #[error("{0}")]
-    Io(#[from] std::io::Error),
+    #[error("read {path}")]
+    Io {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("line {0:?} is not an int")]
     NotInt(String),
     #[error("no values in {0}")]
     EmptyFile(String),
     #[error("path {path:?}: {msg}")]
     Path { path: String, msg: String },
-    #[error("{0}")]
+    #[error(transparent)]
     Encode(#[from] EncodeError),
     #[error("{0} — is the server up?")]
     Http(String),
@@ -38,7 +42,7 @@ pub enum DataError {
     GraphqlErrors(String),
     #[error("pool {pool:?}: path {path:?} matched nothing — schema mismatch?")]
     EmptyMatch { pool: String, path: String },
-    #[error("pool {name:?}: {source}")]
+    #[error("pool {name:?}")]
     Pool {
         name: String,
         #[source]
@@ -158,7 +162,10 @@ pub fn build_pools(cfg: &DataConfig) -> Result<Pools, DataError> {
 }
 
 fn read_pool_file(path: &str, as_type: &str) -> Result<Vec<Value>, DataError> {
-    let text = std::fs::read_to_string(path)?;
+    let text = std::fs::read_to_string(path).map_err(|source| DataError::Io {
+        path: path.to_string(),
+        source,
+    })?;
     let mut vals = Vec::new();
     for line in text.lines() {
         let line = line.trim();
@@ -329,6 +336,28 @@ mod tests {
         let mut p = Pools::new();
         p.insert("ids".into(), Pool::List(vec![json!(5)]));
         p
+    }
+
+    /// The error as run.rs prints it: the whole source chain.
+    fn chain(e: DataError) -> String {
+        format!("{:#}", anyhow::Error::from(e))
+    }
+
+    #[test]
+    fn missing_pool_file_names_its_path_once() {
+        let mut cfg = DataConfig::default();
+        let pc = PoolConfig { pool_type: "file".into(), path: "/no/such/ids.txt".into(), ..Default::default() };
+        cfg.pools.insert("ids".into(), pc);
+        let c = chain(build_pools(&cfg).unwrap_err());
+        assert_eq!(c.matches("/no/such/ids.txt").count(), 1, "{c}");
+        assert_eq!(c.matches("No such file").count(), 1, "{c}");
+        assert!(c.starts_with("pool \"ids\": "), "{c}");
+    }
+
+    #[test]
+    fn wrapped_encode_error_is_printed_once() {
+        let c = chain(DataError::from(EncodeError::UnknownPool("nope".into())));
+        assert_eq!(c.matches("nope").count(), 1, "{c}");
     }
 
     #[test]
