@@ -1,6 +1,8 @@
 //! Reads a production request log (JSON lines or HAR) into a time-ordered
 //! list of events. Parsing only: matching and scheduling live elsewhere.
 
+use std::io::{BufRead, BufReader};
+
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
@@ -44,6 +46,31 @@ impl Trace {
         }
     }
 
+    /// One JSONL line without its `\n`. Blank lines are skipped and not
+    /// counted; a line that is not valid UTF-8 is malformed.
+    fn push_jsonl_line(&mut self, line: usize, raw: &[u8], fields: &ReplayFields) {
+        // A UTF-8 byte-order mark (some Windows tools write one) belongs to
+        // the file, not to the first line's JSON.
+        let raw = if line == 1 {
+            raw.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(raw)
+        } else {
+            raw
+        };
+        // Tolerate CRLF by dropping a single trailing '\r'.
+        let raw = match raw.split_last() {
+            Some((b'\r', head)) => head,
+            _ => raw,
+        };
+        match std::str::from_utf8(raw) {
+            Ok(s) if s.trim().is_empty() => {}
+            Ok(s) => match jsonl_event(s, line, fields) {
+                Ok(ev) => self.events.push(ev),
+                Err(reason) => self.reject(line, &reason),
+            },
+            Err(_) => self.reject(line, "invalid UTF-8"),
+        }
+    }
+
     fn finish(mut self) -> Self {
         self.events.sort_by_key(|e| e.at); // stable: ties keep log order
         self
@@ -56,14 +83,19 @@ pub fn read_trace(cfg: &ReplayConfig) -> Result<Trace, ReplayError> {
         path: cfg.source.clone().into(),
         source,
     };
-    // JSONL is read as bytes so one invalid-UTF-8 line is a malformed line,
-    // not a fatal whole-file error. HAR is a single JSON document.
+    // JSONL is read line by line as bytes, so one invalid-UTF-8 line is a
+    // malformed line, not a fatal whole-file error, and the raw file is never
+    // held in memory whole. HAR is a single JSON document.
     let mut trace = if cfg.format == "har" {
         let text = std::fs::read_to_string(&cfg.source).map_err(io_err)?;
         parse_har(&text)?
     } else {
-        let bytes = std::fs::read(&cfg.source).map_err(io_err)?;
-        parse_jsonl_bytes(&bytes, &cfg.fields)
+        let file = std::fs::File::open(&cfg.source).map_err(io_err)?;
+        let mut trace = Trace::default();
+        for (i, raw) in BufReader::new(file).split(b'\n').enumerate() {
+            trace.push_jsonl_line(i + 1, &raw.map_err(io_err)?, &cfg.fields);
+        }
+        trace.finish()
     };
     if let Some(w) = &cfg.window {
         apply_window(&mut trace, w)?;
@@ -76,20 +108,7 @@ pub fn read_trace(cfg: &ReplayConfig) -> Result<Trace, ReplayError> {
 pub fn parse_jsonl_bytes(bytes: &[u8], fields: &ReplayFields) -> Trace {
     let mut trace = Trace::default();
     for (i, raw) in bytes.split(|&b| b == b'\n').enumerate() {
-        let line = i + 1;
-        // Tolerate CRLF by dropping a single trailing '\r'.
-        let raw = match raw.split_last() {
-            Some((b'\r', head)) => head,
-            _ => raw,
-        };
-        match std::str::from_utf8(raw) {
-            Ok(s) if s.trim().is_empty() => continue,
-            Ok(s) => match jsonl_event(s, line, fields) {
-                Ok(ev) => trace.events.push(ev),
-                Err(reason) => trace.reject(line, &reason),
-            },
-            Err(_) => trace.reject(line, "invalid UTF-8"),
-        }
+        trace.push_jsonl_line(i + 1, raw, fields);
     }
     trace.finish()
 }
@@ -195,12 +214,16 @@ fn required_str(doc: &Value, path: &str) -> Result<String, String> {
     }
 }
 
-/// A string is RFC3339; a number is an epoch whose unit is inferred from its
-/// magnitude: `>= 1e17` → nanoseconds, `>= 1e14` → microseconds, `>= 1e11` →
-/// milliseconds, else seconds (fractions allowed).
+/// A string is RFC3339, or else a quoted epoch number; a number is an epoch
+/// whose unit is inferred from its magnitude: `>= 1e17` → nanoseconds,
+/// `>= 1e14` → microseconds, `>= 1e11` → milliseconds, else seconds
+/// (fractions allowed).
 fn parse_ts(v: &Value) -> Result<DateTime<Utc>, String> {
     match v {
-        Value::String(s) => parse_rfc3339(s),
+        Value::String(s) => parse_rfc3339(s).or_else(|e| match s.parse::<serde_json::Number>() {
+            Ok(n) => parse_ts(&Value::Number(n)),
+            Err(_) => Err(e),
+        }),
         Value::Number(n) => {
             let f = n
                 .as_f64()
@@ -323,6 +346,37 @@ mod tests {
         let t = parse_jsonl(text, &default_fields());
         assert_eq!(t.malformed, 0);
         assert_eq!(offsets(&t), [Duration::ZERO, Duration::from_millis(500)]);
+    }
+
+    #[test]
+    fn jsonl_numeric_string_timestamp_is_epoch() {
+        // nginx `$msec` and friends log the epoch as a quoted string.
+        let text = "{\"ts\":\"1760968800\",\"method\":\"GET\",\"path\":\"/a\"}\n\
+                    {\"ts\":\"1760968800500\",\"method\":\"GET\",\"path\":\"/b\"}\n\
+                    {\"ts\":\"1760968801250000\",\"method\":\"GET\",\"path\":\"/c\"}\n\
+                    {\"ts\":\"soon\",\"method\":\"GET\",\"path\":\"/d\"}\n";
+        let t = parse_jsonl(text, &default_fields());
+        assert_eq!(
+            offsets(&t),
+            [Duration::ZERO, Duration::from_millis(500), Duration::from_millis(1250)]
+        );
+        // A string that is neither still reports the RFC3339 failure.
+        assert_eq!(t.malformed, 1);
+        assert!(
+            t.malformed_examples[0].contains("\"soon\" is not an RFC3339 timestamp"),
+            "{:?}",
+            t.malformed_examples
+        );
+    }
+
+    #[test]
+    fn jsonl_leading_bom_is_ignored() {
+        let text = "\u{feff}{\"ts\":1,\"method\":\"GET\",\"path\":\"/a\"}\n\
+                    {\"ts\":2,\"method\":\"GET\",\"path\":\"/b\"}\n";
+        let t = parse_jsonl(text, &default_fields());
+        assert_eq!(t.malformed, 0, "{:?}", t.malformed_examples);
+        assert_eq!(t.events.len(), 2);
+        assert_eq!(t.events[0].line, 1);
     }
 
     #[test]
