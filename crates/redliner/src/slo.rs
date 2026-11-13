@@ -14,10 +14,14 @@ pub struct SloResult {
     pub passed: bool,
 }
 
-/// Rounds to microseconds and formats the duration.
+/// Truncates to whole microseconds, the precision durations are shown at.
+fn whole_micros(d: Duration) -> Duration {
+    Duration::from_micros(d.as_micros() as u64)
+}
+
+/// Truncates to microseconds and formats the duration.
 pub fn fmt_dur(d: Duration) -> String {
-    let d = Duration::from_micros(d.as_micros() as u64);
-    format!("{d:?}")
+    format!("{:?}", whole_micros(d))
 }
 
 pub fn evaluate(slos: &SloConfig, m: &Metrics) -> Vec<SloResult> {
@@ -36,7 +40,8 @@ pub fn evaluate(slos: &SloConfig, m: &Metrics) -> Vec<SloResult> {
                 name: name.into(),
                 target: format!("<= {target:?}"),
                 observed: fmt_dur(observed),
-                passed: observed <= target,
+                // Judged as shown, not on the histogram bucket edge below it.
+                passed: whole_micros(observed) <= target,
             });
         }
     };
@@ -195,5 +200,23 @@ mod tests {
         assert_eq!(res[0].name, "latency_p999");
         assert!(!res[0].passed);
         assert!(p999.enforced());
+    }
+
+    #[test]
+    fn latency_slo_judges_what_it_shows() {
+        // 99 hits at exactly 1ms and one at 2ms. The histogram answers p50
+        // with its bucket's upper edge, 1.000511ms, shown as "1ms".
+        let mut m = Metrics::new();
+        for i in 0..100 {
+            m.add(&AttackResult {
+                latency: Duration::from_millis(if i == 0 { 2 } else { 1 }),
+                ..hit(200, None)
+            });
+        }
+        m.close();
+        let slos = SloConfig { p50: ConfigDuration(Duration::from_millis(1)), ..Default::default() };
+        let res = evaluate(&slos, &m);
+        assert_eq!((res[0].target.as_str(), res[0].observed.as_str()), ("<= 1ms", "1ms"));
+        assert!(res[0].passed, "{res:?}");
     }
 }

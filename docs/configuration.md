@@ -441,7 +441,7 @@ and exits `1`. An interrupted run exits `130` instead.
 | key             | type     | notes |
 | --------------- | -------- | ----- |
 | `success_rate`  | float    | minimum fraction of successful requests (e.g. `0.995`); must be 0–1 |
-| `p50` / `p95` / `p99` / `p999` | duration | maximum latency at that percentile (`p999` is p99.9, the slowest 1 in 1000) |
+| `p50` / `p95` / `p99` / `p999` | duration | maximum latency at that percentile (`p999` is p99.9, the slowest 1 in 1000); percentiles come from a histogram with 3 significant digits and are judged at the microsecond precision the summary shows |
 | `throughput_min`| float    | minimum successful requests per second; must be >= 0 |
 
 ## `report`

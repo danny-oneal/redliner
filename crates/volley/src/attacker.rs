@@ -1,11 +1,12 @@
 //! The async paced attack loop — the engine core (Go `vegeta.Attacker.Attack`).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use tokio::sync::{mpsc, watch};
 use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
+use tokio::task::{self, JoinError, JoinSet};
 
 use crate::pacer::{Pacer, Targeter};
 use crate::target::{AttackResult, Target};
@@ -121,6 +122,8 @@ impl Attacker {
             let start = Instant::now();
             let mut hits: u64 = 0;
             let mut workers: JoinSet<()> = JoinSet::new();
+            // The hit each live worker fires, to report one that panics.
+            let mut in_flight: HashMap<task::Id, u64> = HashMap::new();
 
             loop {
                 if *stop.borrow() {
@@ -138,7 +141,7 @@ impl Attacker {
                         break;
                     }
                     tokio::select! {
-                        _ = tokio::time::sleep(wait) => continue,
+                        _ = sleep_until(start + elapsed + wait) => continue,
                         _ = stopped(&mut stop) => break,
                     }
                 }
@@ -153,6 +156,11 @@ impl Attacker {
                     _ = stopped(&mut stop) => break,
                 };
 
+                // A JoinSet keeps every finished task until it is joined.
+                while let Some(done) = workers.try_join_next_with_id() {
+                    reap(done, &mut in_flight, &tx, &name).await;
+                }
+
                 let seq = hits;
                 hits += 1;
 
@@ -161,20 +169,41 @@ impl Attacker {
                 let targeter = targeter.clone();
                 let name = name.clone();
 
-                workers.spawn(async move {
-                    let result = run_hit(&client, targeter.as_ref(), name, seq).await;
-                    let _ = tx.send(result).await;
-                    drop(permit);
-                });
+                let id = workers
+                    .spawn(async move {
+                        let result = run_hit(&client, targeter.as_ref(), name, seq).await;
+                        let _ = tx.send(result).await;
+                        drop(permit);
+                    })
+                    .id();
+                in_flight.insert(id, seq);
             }
 
-            // Drop the scheduler's own sender so the channel can close once the
-            // workers (which hold the remaining clones) finish.
+            while let Some(done) = workers.join_next_with_id().await {
+                reap(done, &mut in_flight, &tx, &name).await;
+            }
+            // Drop the scheduler's own sender, the last one, to close the channel.
             drop(tx);
-            while workers.join_next().await.is_some() {}
         });
 
         rx
+    }
+}
+
+/// How long before a hit is due the scheduler stops sleeping and spins.
+const SPIN: Duration = Duration::from_millis(1);
+
+/// Waits until `due`. tokio's timer ticks in milliseconds, so sleeping the
+/// whole wait would round it up to the next tick and fire hits less than a
+/// millisecond apart as 1ms bursts. The timer sleeps to within [`SPIN`] of
+/// `due` and the rest is spun, yielding to other tasks; above ~1000 rps that
+/// keeps up to one core busy.
+async fn sleep_until(due: Instant) {
+    if due.saturating_duration_since(Instant::now()) > SPIN {
+        tokio::time::sleep_until((due - SPIN).into()).await;
+    }
+    while Instant::now() < due {
+        tokio::task::yield_now().await;
     }
 }
 
@@ -183,6 +212,45 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
     if stop.wait_for(|s| *s).await.is_err() {
         std::future::pending::<()>().await;
     }
+}
+
+/// Forgets a finished worker. One that panicked never sent its result, so
+/// its hit is reported here as a failure instead of vanishing from the counts.
+async fn reap(
+    done: Result<(task::Id, ()), JoinError>,
+    in_flight: &mut HashMap<task::Id, u64>,
+    tx: &mpsc::Sender<AttackResult>,
+    name: &str,
+) {
+    let e = match done {
+        Ok((id, ())) => {
+            in_flight.remove(&id);
+            return;
+        }
+        Err(e) => e,
+    };
+    let Some(seq) = in_flight.remove(&e.id()) else { return };
+    let Ok(panic) = e.try_into_panic() else { return };
+    let msg = panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("");
+    let _ = tx
+        .send(AttackResult {
+            attack: name.to_string(),
+            seq,
+            code: 0,
+            timestamp: SystemTime::now(),
+            latency: Duration::ZERO,
+            bytes_in: 0,
+            bytes_out: 0,
+            error: Some(format!("worker panicked: {msg}")),
+            method: String::new(),
+            url: String::new(),
+            body: Vec::new(),
+        })
+        .await;
 }
 
 /// Builds and issues one request, mapping the outcome into an [`AttackResult`].
@@ -248,7 +316,7 @@ async fn run_hit<T: Targeter + ?Sized>(
                     latency: start.elapsed(),
                     bytes_in: 0,
                     bytes_out,
-                    error: Some(e.to_string()),
+                    error: Some(describe(e)),
                     method: method.to_string(),
                     url,
                     body: Vec::new(),
@@ -263,12 +331,36 @@ async fn run_hit<T: Targeter + ?Sized>(
             latency: start.elapsed(),
             bytes_in: 0,
             bytes_out,
-            error: Some(e.to_string()),
+            error: Some(describe(e)),
             method: method.to_string(),
             url,
             body: Vec::new(),
         },
     }
+}
+
+/// A transport error as `kind: message: cause: ...`, without the URL (each
+/// result carries its own), so the same failure reads the same on every hit.
+fn describe(e: reqwest::Error) -> String {
+    let kind = if e.is_timeout() {
+        "timeout"
+    } else if e.is_connect() {
+        "connect"
+    } else if e.is_body() {
+        "body"
+    } else if e.is_decode() {
+        "decode"
+    } else {
+        "request"
+    };
+    let e = e.without_url();
+    let mut msg = format!("{kind}: {e}");
+    let mut source = std::error::Error::source(&e);
+    while let Some(cause) = source {
+        msg.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    msg
 }
 
 #[cfg(test)]
@@ -426,6 +518,66 @@ mod tests {
         }
     }
 
+    /// Points hit `seq` at `{base}{seq}`, so every request has its own URL.
+    struct PathTargeter {
+        base: String,
+    }
+
+    impl Targeter for PathTargeter {
+        fn target(&self, seq: u64, t: &mut Target) -> Result<(), Error> {
+            t.method = http::Method::GET;
+            t.url = format!("{}{seq}", self.base);
+            Ok(())
+        }
+    }
+
+    /// Collects the distinct errors of a 10-hit attack.
+    async fn distinct_errors(base: String, timeout: Duration) -> Vec<String> {
+        let attacker = Attacker::new(cfg(timeout)).unwrap();
+        let pacer = Arc::new(ConstantPacer { freq: 50, per: Duration::from_secs(1) });
+        let mut rx = attacker.attack(
+            Arc::new(PathTargeter { base }),
+            pacer,
+            Duration::from_millis(210),
+            "errs".to_string(),
+        );
+        let mut errors = std::collections::BTreeSet::new();
+        let mut n = 0;
+        while let Some(r) = rx.recv().await {
+            n += 1;
+            errors.insert(r.error.expect("a transport error"));
+        }
+        assert!(n >= 5, "fired only {n}");
+        errors.into_iter().collect()
+    }
+
+    #[tokio::test]
+    async fn transport_error_names_its_kind_and_cause_not_the_url() {
+        // Nothing listens on port 1 → connection refused.
+        let errors = distinct_errors("http://127.0.0.1:1/p".into(), Duration::from_secs(1)).await;
+        assert_eq!(errors.len(), 1, "one error per URL: {errors:?}");
+        assert!(errors[0].starts_with("connect: "), "{errors:?}");
+        assert!(errors[0].to_lowercase().contains("refused"), "no cause: {errors:?}");
+        assert!(!errors[0].contains("127.0.0.1"), "url in the error: {errors:?}");
+    }
+
+    #[tokio::test]
+    async fn transport_error_tells_a_timeout_from_a_refusal() {
+        // Accepts and never answers.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let errors = distinct_errors(format!("http://{addr}/p"), Duration::from_millis(50)).await;
+        assert_eq!(errors.len(), 1, "one error per URL: {errors:?}");
+        assert!(errors[0].starts_with("timeout: "), "{errors:?}");
+        assert!(!errors[0].contains("127.0.0.1"), "url in the error: {errors:?}");
+    }
+
     #[tokio::test]
     async fn attack_stops_at_deadline() {
         let url = spawn_ok_server().await;
@@ -555,6 +707,106 @@ mod tests {
             t.url = self.url.clone();
             Ok(())
         }
+    }
+
+    /// Panics on hit 1; every other hit fails without any I/O.
+    struct PanicTargeter;
+
+    impl Targeter for PanicTargeter {
+        fn target(&self, seq: u64, _t: &mut Target) -> Result<(), Error> {
+            if seq == 1 {
+                panic!("boom");
+            }
+            Err(Error::Build("no target".into()))
+        }
+    }
+
+    /// Fails every hit before any I/O.
+    struct NoTarget;
+
+    impl Targeter for NoTarget {
+        fn target(&self, _seq: u64, _t: &mut Target) -> Result<(), Error> {
+            Err(Error::Build("no target".into()))
+        }
+    }
+
+    /// Wraps a pacer, recording when each hit was released (a zero wait).
+    struct Recording<P> {
+        inner: P,
+        fired: std::sync::Mutex<Vec<Duration>>,
+    }
+
+    impl<P: Pacer> Pacer for Recording<P> {
+        fn pace(&self, elapsed: Duration, hits: u64) -> (Duration, bool) {
+            let (wait, stop) = self.inner.pace(elapsed, hits);
+            if wait.is_zero() && !stop {
+                self.fired.lock().unwrap().push(elapsed);
+            }
+            (wait, stop)
+        }
+
+        fn rate(&self, elapsed: Duration) -> f64 {
+            self.inner.rate(elapsed)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn attack_spaces_hits_finer_than_the_timer_tick() {
+        // 5000 rps: a hit every 200µs, five per tokio timer tick (1ms).
+        let pacer = Arc::new(Recording {
+            inner: ConstantPacer { freq: 5000, per: Duration::from_secs(1) },
+            fired: std::sync::Mutex::new(Vec::new()),
+        });
+        let attacker = Attacker::new(cfg(Duration::from_secs(5))).unwrap();
+        let mut rx = attacker.attack(
+            Arc::new(NoTarget),
+            pacer.clone(),
+            Duration::from_millis(500),
+            "spin".to_string(),
+        );
+        while rx.recv().await.is_some() {}
+
+        let fired = pacer.fired.lock().unwrap().clone();
+        let gaps: Vec<Duration> = fired.windows(2).map(|w| w[1] - w[0]).collect();
+        let bursts = gaps.iter().filter(|&&g| g < Duration::from_micros(50)).count();
+        let share = bursts as f64 / gaps.len() as f64;
+        // Sleeping to the tick fires them as 1ms bursts: ~80% of the gaps are
+        // within a burst. A preempted scheduler still catches up in a burst.
+        assert!(share < 0.25, "{:.0}% of {} gaps within a burst", share * 100.0, gaps.len());
+    }
+
+    /// Fires three hits at once, then stops.
+    struct ThreeHits;
+
+    impl Pacer for ThreeHits {
+        fn pace(&self, _elapsed: Duration, hits: u64) -> (Duration, bool) {
+            (Duration::ZERO, hits >= 3)
+        }
+
+        fn rate(&self, _elapsed: Duration) -> f64 {
+            0.0
+        }
+    }
+
+    #[tokio::test]
+    async fn attack_reports_a_panicked_worker_as_a_failed_hit() {
+        let attacker = Attacker::new(cfg(Duration::from_secs(5))).unwrap();
+        let mut rx = attacker.attack(
+            Arc::new(PanicTargeter),
+            Arc::new(ThreeHits),
+            Duration::from_secs(30),
+            "panic".to_string(),
+        );
+        let mut results = Vec::new();
+        while let Some(r) = rx.recv().await {
+            results.push(r);
+        }
+
+        results.sort_by_key(|r| r.seq);
+        assert_eq!(results.iter().map(|r| r.seq).collect::<Vec<_>>(), [0, 1, 2]);
+        let r = &results[1];
+        assert_eq!(r.error.as_deref(), Some("worker panicked: boom"));
+        assert_eq!((r.code, r.attack.as_str()), (0, "panic"));
     }
 
     #[tokio::test]
