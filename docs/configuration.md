@@ -118,7 +118,7 @@ Without either, the run is a normal profile run and every `match` is ignored.
 | `format`       | enum     | inferred    | `json` \| `har`; inferred from the extension: `.har` is `har`, anything else is `json` (JSON lines) |
 | `window`       | object   | —           | `{ start, end }` RFC3339 timestamps; replay only entries in the half-open range `[start, end)`; `start` must be before `end` |
 | `speed`        | float    | `1.0`       | time compression: every gap is divided by `speed`, so `2.0` replays twice as fast. Must be > 0 |
-| `copies`       | int      | `1`         | amplification: overlay `copies` copies of the log (see below) |
+| `copies`       | int      | `1`         | amplification: overlay `copies` copies of the log (see below). Must be > 0 |
 | `on_unmatched` | enum     | `skip`      | `skip` \| `fail`: what to do with entries no scenario matches |
 | `fields`       | object   | see below   | JSONL field mapping |
 

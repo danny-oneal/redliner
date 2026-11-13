@@ -28,6 +28,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Replay: a JSONL epoch timestamp logged as a quoted string
   (`"ts":"1760968800"`, as nginx `$msec` writes it) is read as the number
   instead of making the line malformed.
+- Replay: `speed: 0`, `copies: 0`, `--speed 0` and `--copies 0` are
+  validation errors (exit `2`) instead of silently meaning `1`.
 - Replay: a UTF-8 byte-order mark at the start of a JSONL log no longer makes
   the first line malformed (dropping its event).
 - Replay reads a JSONL log line by line instead of loading the whole file

@@ -158,7 +158,7 @@ pub struct MatchConfig {
 }
 
 /// Replay a production request log at its recorded pace.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ReplayConfig {
     /// Log file; a relative path resolves against the config directory.
@@ -174,6 +174,22 @@ pub struct ReplayConfig {
     /// What to do with entries no scenario matches: skip | fail.
     pub on_unmatched: String,
     pub fields: ReplayFields,
+}
+
+// `speed` and `copies` default to 1 here rather than in `apply_defaults`, so
+// an explicit `0` (YAML or `--speed`/`--copies`) reaches validation.
+impl Default for ReplayConfig {
+    fn default() -> Self {
+        ReplayConfig {
+            source: String::new(),
+            format: String::new(),
+            window: None,
+            speed: 1.0,
+            copies: 1,
+            on_unmatched: String::new(),
+            fields: ReplayFields::default(),
+        }
+    }
 }
 
 /// RFC3339 timestamps bounding the replayed slice of the log.
@@ -408,12 +424,6 @@ impl Config {
                     "json"
                 }
                 .into();
-            }
-            if r.speed == 0.0 {
-                r.speed = 1.0;
-            }
-            if r.copies == 0 {
-                r.copies = 1;
             }
             if r.on_unmatched.is_empty() {
                 r.on_unmatched = "skip".into();
@@ -717,6 +727,9 @@ fn validate_replay(r: &ReplayConfig, errs: &mut Vec<String>) {
     }
     if !(r.speed.is_finite() && r.speed > 0.0) {
         errs.push("replay.speed must be > 0".into());
+    }
+    if r.copies == 0 {
+        errs.push("replay.copies must be > 0".into());
     }
     if !matches!(r.on_unmatched.as_str(), "skip" | "fail") {
         errs.push(format!(

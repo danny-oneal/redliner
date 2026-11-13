@@ -513,6 +513,27 @@ fn replay_rejects_bad_knobs() {
 }
 
 #[test]
+fn replay_zero_speed_or_copies_rejected() {
+    // `0` must not silently become the default `1`, from YAML or a flag.
+    let scen = "scenarios:\n  - {name: a, request: {query: q}, match: {operation: a}}\n";
+    let e = err_text(load_str(&format!(
+        "{GQL_HEAD}replay: {{source: l.jsonl, speed: 0, copies: 0}}\n{scen}"
+    )));
+    assert!(e.contains("replay.speed must be > 0"), "{e}");
+    assert!(e.contains("replay.copies must be > 0"), "{e}");
+    let dir = tempdir(&format!("{GQL_HEAD}{REPLAY_GQL}"));
+    let e = load_config_file_with(&dir.join("c.yaml"), |c| {
+        let r = c.replay.as_mut().expect("replay block");
+        r.speed = 0.0;
+        r.copies = 0;
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("replay.speed must be > 0"), "{e}");
+    assert!(e.contains("replay.copies must be > 0"), "{e}");
+}
+
+#[test]
 fn profile_mode_ignores_match_blocks() {
     let y = format!(
         "{GQL_HEAD}load: {{profile: constant, rate: 5, duration: 1s}}\nscenarios:\n  - {{name: a, weight: 1, request: {{query: q}}, match: {{operation: a}}}}\n"
