@@ -22,6 +22,16 @@ struct GraphqlRoute {
     templated: Vec<HeaderTemplate>,
 }
 
+/// A request body, borrowing the scenario's query rather than copying it
+/// per hit. Keys are in sorted order, as a `serde_json::Map` writes them.
+#[derive(serde::Serialize)]
+struct Body<'a> {
+    #[serde(rename = "operationName", skip_serializing_if = "Option::is_none")]
+    operation_name: Option<&'a str>,
+    query: &'a str,
+    variables: serde_json::Map<String, serde_json::Value>,
+}
+
 pub struct GraphqlEncoder {
     routes: Vec<GraphqlRoute>,
 }
@@ -60,18 +70,17 @@ impl GraphqlEncoder {
             .iter()
             .find(|r| r.name == sc.name)
             .ok_or_else(|| EncodeError::InvalidHeader(format!("unknown scenario {}", sc.name)))?;
-        let variables = render_value(
-            &serde_json::Value::Object(sc.request.variables.clone().into_iter().collect()),
-            pools,
-            rng,
-        )?;
-        let mut body = serde_json::json!({
-            "query": sc.request.query,
-            "variables": variables,
-        });
-        if let Some(op) = &route.operation_name {
-            body["operationName"] = op.as_str().into();
-        }
+        let variables = sc
+            .request
+            .variables
+            .iter()
+            .map(|(k, v)| Ok((k.clone(), render_value(v, pools, rng)?)))
+            .collect::<Result<_, EncodeError>>()?;
+        let body = Body {
+            operation_name: route.operation_name.as_deref(),
+            query: &sc.request.query,
+            variables,
+        };
         let body = serde_json::to_vec(&body).map_err(|e| EncodeError::Body(e.to_string()))?;
         t.method = Method::POST;
         t.url.clone_from(&route.url);
@@ -291,6 +300,23 @@ mod tests {
         assert_eq!(v["operationName"], "GetProduct");
         assert_eq!(v["query"], "query GetProduct { p { id } }");
         assert_eq!(v["variables"]["id"], 5);
+    }
+
+    #[test]
+    fn graphql_body_bytes_are_pinned() {
+        let mut sc = scenario("GetProduct");
+        sc.request.variables =
+            [("id", serde_json::json!("{{id}}")), ("a", serde_json::json!({"n": [1, "x-{{id}}"]}))]
+                .map(|(k, v)| (k.to_string(), v))
+                .into();
+        let mut pools = Pools::new();
+        pools.insert("id".into(), Pool::Range { min: 1, max: 1000 });
+        let mut t = Target::default();
+        enc_for(std::slice::from_ref(&sc)).encode(&mut t, &sc, &pools, &mut rng()).unwrap();
+        assert_eq!(
+            String::from_utf8(t.body).unwrap(),
+            r#"{"operationName":"GetProduct","query":"query GetProduct { p { id } }","variables":{"a":{"n":[1,"x-403"]},"id":81}}"#
+        );
     }
 
     #[test]
