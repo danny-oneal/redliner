@@ -1267,3 +1267,55 @@ async fn e2e_summary_shows_p999_and_status_classes() {
     assert!(stdout.contains("latency_p999"), "the p99.9 SLO is evaluated: {stdout}");
 }
 
+
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_closed_stdout_keeps_the_exit_code() {
+    // `redliner ... | head -0`: the summary's reader is gone before it is
+    // printed. The verdict must still reach the exit code (no panic, 101).
+    let mock = spawn_mock().await;
+    let dir = tempdir("closed-stdout");
+    let cfg = write_cfg(&dir, &mock.url, "");
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_redliner"));
+    cmd.arg("--config").arg(&cfg).args(["--out", dir.to_str().unwrap()]);
+    cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let out = tokio::task::spawn_blocking(move || {
+        let mut child = cmd.spawn().unwrap();
+        drop(child.stdout.take());
+        child.wait_with_output().unwrap()
+    })
+    .await
+    .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_report_write_failure_still_prints_the_summary() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("write-failure");
+    let cfg = write_cfg(&dir, &mock.url, "");
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_redliner"));
+    cmd.arg("--config").arg(&cfg).args(["--out", dir.to_str().unwrap()]);
+    let child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Once the run's dir exists (traffic is flowing), put a directory where
+    // metrics.json goes, so writing the reports fails after the attack.
+    let latest = dir.join("latest");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !latest.join("run_manifest.json").exists() {
+        assert!(std::time::Instant::now() < deadline, "no report dir appeared");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let blocker = std::fs::canonicalize(&latest).unwrap().join("metrics.json");
+    std::fs::create_dir(&blocker).unwrap();
+    let out = tokio::task::spawn_blocking(move || child.wait_with_output().unwrap()).await.unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stdout.contains("==== redliner summary ===="), "the verdict is still shown: {stdout}");
+    assert!(stderr.contains(blocker.to_str().unwrap()), "names the path: {stderr}");
+}

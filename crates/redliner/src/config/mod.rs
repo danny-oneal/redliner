@@ -275,13 +275,13 @@ pub struct ReportConfig {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("read {}: {source}", path.display())]
+    #[error("read {}", path.display())]
     Io {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("parse {}: {source}", path.display())]
+    #[error("parse {}", path.display())]
     Parse {
         path: PathBuf,
         #[source]

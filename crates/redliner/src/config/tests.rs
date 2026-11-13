@@ -121,6 +121,16 @@ fn unknown_key_rejected() {
 }
 
 #[test]
+fn parse_error_cause_is_printed_once() {
+    // run.rs prints the whole chain (`{e:#}`); the YAML message must not
+    // appear in both the error's Display and its source.
+    let e = load_str("targett:\n  url: http://x\n").unwrap_err();
+    let chain = format!("{:#}", anyhow::Error::from(e));
+    assert_eq!(chain.matches("unknown field `targett`").count(), 1, "{chain}");
+    assert!(chain.starts_with("parse "), "{chain}");
+}
+
+#[test]
 fn unknown_nested_key_rejected() {
     let y = format!("{GQL_HEAD}  timeoutt: 5s\n{ONE_GQL}");
     assert!(matches!(load_str(&y), Err(ConfigError::Parse { .. })));
