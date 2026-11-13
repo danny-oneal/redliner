@@ -63,9 +63,8 @@ curl -fsSL https://raw.githubusercontent.com/danny-oneal/redliner/main/scripts/i
 
 Set `REDLINER_VERSION=v0.2.0` to pin a release or `REDLINER_INSTALL_DIR` to
 install elsewhere. The Linux binaries are static (musl), so they run on any
-distro and in `scratch`/distroless images. Windows builds are attached to each
-[release](https://github.com/danny-oneal/redliner/releases) as a `.zip` with a
-`.sha256`.
+distro and in `scratch`/distroless images. Releases ship Linux and macOS
+binaries only; on Windows, build from source.
 
 **From source** needs a **Rust toolchain ≥ 1.88** ([rustup](https://rustup.rs)).
 

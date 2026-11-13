@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+- Windows release archives. Releases ship Linux (x86_64 glibc and musl,
+  aarch64 musl) and macOS (Apple Silicon and Intel) binaries; on Windows,
+  build from source (`cargo install --path crates/redliner`).
+
 ### Added
 - `volley::Metrics::add_with_success`, for callers whose idea of success is
   not "no error and a 2xx/3xx code". `Metrics::add` keeps that default.
