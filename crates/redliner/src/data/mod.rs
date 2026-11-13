@@ -277,6 +277,9 @@ pub fn render_escaped(
             )));
         };
         let name = rest[start + 2..start + end].trim();
+        if name.is_empty() {
+            return Err(EncodeError::BadTemplate(format!("empty {{{{}}}} in {s:?}")));
+        }
         let pool = pools
             .get(name)
             .ok_or_else(|| EncodeError::UnknownPool(name.to_string()))?;
@@ -289,19 +292,21 @@ pub fn render_escaped(
 }
 
 /// Substitutes placeholders inside an arbitrary JSON value (GraphQL
-/// variables). A string that is exactly one placeholder keeps the sampled
-/// value's native type; anything else falls back to string interpolation.
+/// variables). A string that is exactly one placeholder (surrounding
+/// whitespace aside) keeps the sampled value's native type; anything else
+/// falls back to string interpolation.
 pub fn render_value(v: &Value, pools: &Pools, rng: &mut ChaCha8Rng) -> Result<Value, EncodeError> {
     match v {
         Value::String(t) => {
-            let trimmed = t.trim();
-            if trimmed.starts_with("{{") && trimmed.ends_with("}}") {
-                if let Some(inner) = trimmed.get(2..trimmed.len() - 2) {
-                    let inner = inner.trim();
-                    if !inner.contains("{{") && !inner.contains("}}") {
+            // One placeholder only when the first `}}` ends the string, as
+            // `render_string` reads it (`{{ids}}}` is `{{ids}}` then `}`).
+            if let Some(inner) = t.trim().strip_prefix("{{") {
+                if let Some(end) = inner.find("}}").filter(|&e| e + 2 == inner.len()) {
+                    let name = inner[..end].trim();
+                    if !name.is_empty() && !name.contains("{{") {
                         let pool = pools
-                            .get(inner)
-                            .ok_or_else(|| EncodeError::UnknownPool(inner.to_string()))?;
+                            .get(name)
+                            .ok_or_else(|| EncodeError::UnknownPool(name.to_string()))?;
                         return Ok(pool.sample(rng));
                     }
                 }
@@ -378,6 +383,28 @@ mod tests {
         assert_eq!(out, json!({"id":5}));
         let out = render_value(&json!({"p":"/u/{{ids}}/x"}), &p, &mut rng()).unwrap();
         assert_eq!(out, json!({"p":"/u/5/x"}));
+    }
+
+    #[test]
+    fn render_value_native_type_needs_the_whole_value_to_be_one_placeholder() {
+        let p = ids();
+        let one = |s: &str| render_value(&json!(s), &p, &mut rng());
+        // The first `}}` closes the placeholder; the trailing `}` is text.
+        assert_eq!(one("{{ids}}}").unwrap(), json!("5}"));
+        assert_eq!(one("{{ids}}-{{ids}}").unwrap(), json!("5-5"));
+        // Whitespace around (and inside) the braces is trimmed.
+        assert_eq!(one(" {{ ids }} ").unwrap(), json!(5));
+    }
+
+    #[test]
+    fn empty_placeholder_is_a_bad_template() {
+        for e in [
+            render_string("/u/{{}}", &ids(), &mut rng()).unwrap_err(),
+            render_value(&json!("{{ }}"), &ids(), &mut rng()).unwrap_err(),
+        ] {
+            assert!(matches!(e, EncodeError::BadTemplate(_)), "{e:?}");
+            assert!(e.to_string().contains("empty"), "{e}");
+        }
     }
 
     #[test]

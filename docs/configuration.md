@@ -360,9 +360,11 @@ instead.
 | `body`    | string | —       | request body; `{{pool}}` placeholders are rendered; sets `Content-Type: application/json` when present and none is given |
 | `headers` | map    | `{}`    | per-scenario, override the base headers for that route only; values may contain `{{pool}}` placeholders (e.g. `Idempotency-Key: "{{order_refs}}"`), rendered per request after the path and body |
 
-**Templating.** A value that is *exactly* one placeholder keeps the sampled
-value's native type (`id: "{{ids}}"` encodes as a JSON number); an embedded
-placeholder (`"/u/{{ids}}/x"`) interpolates as a string.
+**Templating.** A value that is *exactly* one placeholder, give or take
+surrounding whitespace (`"{{ids}}"`, `" {{ ids }} "`), keeps the sampled
+value's native type (`id: "{{ids}}"` encodes as a JSON number); anything else,
+an embedded placeholder (`"/u/{{ids}}/x"`) or text after it (`"{{ids}}}"` is
+`{{ids}}` then `}`), interpolates as a string. An empty `{{}}` is an error.
 
 ### `match`
 

@@ -98,6 +98,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A GraphQL `target.url` with a query string (`/graphql?tenant=t1`) keeps
   it intact: the `op` tag is joined with `&`. It was appended after a second
   `?`, so the server read `tenant` as `t1?op=<scenario>`.
+- A GraphQL variable like `"{{ids}}}"` interpolates as the string `5}`
+  instead of failing every request with `unknown pool ids}`, and an empty
+  `{{}}` is reported as such instead of as `unknown pool` with no name.
 
 ## [0.5.1] - 2026-10-31
 
