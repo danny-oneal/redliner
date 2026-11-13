@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+- `redliner-volley` (breaking): the never-constructed `Error::Http` and
+  `Error::Timeout` variants, and the unused `futures` dependency. A failed
+  request was always reported in `AttackResult::error`, never as these.
+
 ### Added
 - `volley::Metrics::add_with_success`, for callers whose idea of success is
   not "no error and a 2xx/3xx code". `Metrics::add` keeps that default.
