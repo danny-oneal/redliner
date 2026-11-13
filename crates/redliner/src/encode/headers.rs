@@ -1,8 +1,60 @@
+use std::collections::BTreeMap;
+
 use base64::Engine;
 use http::{HeaderMap, HeaderName, HeaderValue};
+use rand_chacha::ChaCha8Rng;
 
 use super::EncodeError;
 use crate::config::TargetConfig;
+use crate::data::{render_string, Pools};
+
+/// A scenario header whose value holds `{{pool}}` placeholders, rendered per request.
+pub struct HeaderTemplate {
+    name: HeaderName,
+    /// The key as written in the config, for error messages.
+    key: String,
+    value: String,
+}
+
+/// Layers a scenario's `headers` over `base`, for that scenario only. Values
+/// with `{{pool}}` placeholders come back as templates for [`render_templates`].
+pub fn scenario_headers(
+    base: &HeaderMap,
+    headers: &BTreeMap<String, String>,
+) -> Result<(HeaderMap, Vec<HeaderTemplate>), EncodeError> {
+    // A clone so scenario headers never leak into the base or other scenarios.
+    let mut h = base.clone();
+    let mut templated = Vec::new();
+    for (k, v) in headers {
+        let n = HeaderName::from_bytes(k.as_bytes())
+            .map_err(|e| EncodeError::InvalidHeader(format!("{k}: {e}")))?;
+        // Checked even when templated, so a bad character fails at startup.
+        let hv = HeaderValue::from_str(v)
+            .map_err(|e| EncodeError::InvalidHeader(format!("{k}: {e}")))?;
+        if v.contains("{{") {
+            templated.push(HeaderTemplate { name: n, key: k.clone(), value: v.clone() });
+        } else {
+            h.insert(n, hv);
+        }
+    }
+    Ok((h, templated))
+}
+
+/// Renders each template into `h`, replacing any header of the same name.
+pub fn render_templates(
+    h: &mut HeaderMap,
+    templated: &[HeaderTemplate],
+    pools: &Pools,
+    rng: &mut ChaCha8Rng,
+) -> Result<(), EncodeError> {
+    for t in templated {
+        let v = render_string(&t.value, pools, rng)?;
+        let v = HeaderValue::from_str(&v)
+            .map_err(|e| EncodeError::InvalidHeader(format!("{}: {e}", t.key)))?;
+        h.insert(t.name.clone(), v);
+    }
+    Ok(())
+}
 
 /// Mirrors Go `baseHeaders`: Accept, user headers, then auth from the env.
 pub fn base_headers(cfg: &TargetConfig) -> Result<HeaderMap, EncodeError> {
@@ -33,7 +85,8 @@ pub fn base_headers(cfg: &TargetConfig) -> Result<HeaderMap, EncodeError> {
     Ok(h)
 }
 
-fn set(h: &mut HeaderMap, name: &str, value: &str) -> Result<(), EncodeError> {
+/// Inserts `name: value`, replacing any header of the same name.
+pub fn set(h: &mut HeaderMap, name: &str, value: &str) -> Result<(), EncodeError> {
     let n = HeaderName::from_bytes(name.as_bytes())
         .map_err(|e| EncodeError::InvalidHeader(format!("{name}: {e}")))?;
     let v = HeaderValue::from_str(value)

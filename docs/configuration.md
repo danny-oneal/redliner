@@ -80,7 +80,7 @@ auth:
 | `steps`    | list     | —         | `[{ rate, duration }, ...]` for `profile: steps` |
 | `workers`  | int      | `10`      | initial concurrency (informational) |
 | `max_workers` | int   | `100000`  | hard cap on in-flight requests |
-| `seed`     | int      | `0`       | `0` derives a seed from the wall clock and records it; a fixed value reproduces pacing and sampling exactly |
+| `seed`     | int      | `0`       | `0` derives a seed from the wall clock and records it; a fixed value reproduces pacing and sampling exactly: each hit draws its scenario and pool values from its own stream, so worker concurrency can't reorder them (a `sequence` pool hands out the same numbers, though not always to the same hits) |
 
 Rates must be finite. `constant` and each `steps` entry must also satisfy
 `rate × duration > 1`: they fire their first hit at `1/rate`, and a hit due
@@ -301,12 +301,13 @@ previous run (idempotency keys against a persistent store), leave `seed` at
 `0` (time-based) or pass a new `--seed`. `timestamp` reads the clock, so it is
 the one pool a seed can't reproduce.
 
-REST scenario `headers` take placeholders too, which is how an idempotency key
+Scenario `headers` take placeholders too, which is how an idempotency key
 or correlation ID gets a fresh value on every request. They render after the
-path and body, so adding one to a seeded config doesn't change the paths and
-bodies it sends. `target.headers` and `-H` are sent as written: they're shared
-by every request, including the harvest probe, which runs before the pools
-exist.
+path, body and variables, so adding one to a seeded config doesn't change the
+requests it sends otherwise. `target.headers` and `-H` are sent as written:
+they're shared by every request, including the harvest probe, which runs
+before the pools exist. A harvest request's own `headers` are sent as written
+too, on that probe only, over the target's.
 
 ### `data.harvest`
 
@@ -341,7 +342,7 @@ instead.
 
 | key       | type   | notes |
 | --------- | ------ | ----- |
-| `name`    | string | used for per-operation report attribution |
+| `name`    | string | used for per-operation report attribution; for GraphQL, also sent as `operationName` when the query defines an operation by that name (`query GetProduct($id: Int!) { ... }`), and left out otherwise, so an anonymous query works under any name |
 | `weight`  | float  | relative selection weight, default `1`; must be > 0 and finite in profile mode, ignored in replay mode |
 | `match`   | object | replay mode only: which log entries this scenario serves (see [`match`](#match)); ignored in profile mode |
 | `request` | object | the per-protocol request (below) |
@@ -353,19 +354,22 @@ instead.
 | `query`     | string | inline GraphQL document (mutually exclusive with `query_file`) |
 | `query_file`| string | path to a `.graphql` document, resolved relative to the config |
 | `variables` | map    | `{{pool}}` placeholders are rendered per request |
+| `headers`   | map    | per-scenario, override the base headers for that scenario only; values may contain `{{pool}}` placeholders, rendered per request after the variables |
 
 ### `request` — REST
 
 | key       | type   | default | notes |
 | --------- | ------ | ------- | ----- |
 | `method`  | string | `GET`   | upper-cased |
-| `path`    | string | —       | appended to `target.url` as written, so it must start with `/`; may contain `{{pool}}` placeholders |
+| `path`    | string | —       | appended to `target.url` as written, so it must start with `/`; may contain `{{pool}}` placeholders, whose values are percent-encoded (all but `A-Za-z0-9-._~`), so each stays one path segment or query value |
 | `body`    | string | —       | request body; `{{pool}}` placeholders are rendered; sets `Content-Type: application/json` when present and none is given |
 | `headers` | map    | `{}`    | per-scenario, override the base headers for that route only; values may contain `{{pool}}` placeholders (e.g. `Idempotency-Key: "{{order_refs}}"`), rendered per request after the path and body |
 
-**Templating.** A value that is *exactly* one placeholder keeps the sampled
-value's native type (`id: "{{ids}}"` encodes as a JSON number); an embedded
-placeholder (`"/u/{{ids}}/x"`) interpolates as a string.
+**Templating.** A value that is *exactly* one placeholder, give or take
+surrounding whitespace (`"{{ids}}"`, `" {{ ids }} "`), keeps the sampled
+value's native type (`id: "{{ids}}"` encodes as a JSON number); anything else,
+an embedded placeholder (`"/u/{{ids}}/x"`) or text after it (`"{{ids}}}"` is
+`{{ids}}` then `}`), interpolates as a string. An empty `{{}}` is an error.
 
 ### `match`
 

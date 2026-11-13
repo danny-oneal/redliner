@@ -374,19 +374,23 @@ async fn attack_profile(
     let warmup = cfg.load.warmup.as_std();
     if !warmup.is_zero() {
         let first_rate = phases.first().map_or(0.0, |p| p.rate);
-        let pacer = Arc::new(ConstantPacer::from_rate(first_rate / 10.0));
-        let mut rx =
-            attacker.attack_until(targeter.clone(), pacer, warmup, "warmup".into(), stop.clone());
+        let freq = ((first_rate / 10.0) as u64).max(1);
+        let pacer = Arc::new(ConstantPacer { freq, per: Duration::from_secs(1) });
+        let attacker = new_attacker(cfg)?;
+        let warm = Arc::new(targeter.attack(0));
+        let mut rx = attacker.attack_until(warm, pacer, warmup, "warmup".into(), stop.clone());
         while rx.recv().await.is_some() {}
     }
 
     let start = Instant::now();
     live.begin();
-    for ph in phases {
+    for (n, ph) in (1..).zip(phases) {
         if *stop.borrow() {
             break;
         }
         eprintln!("attack: {} for {:?} (nominal {} rps)", ph.name, ph.duration, ph.rate);
+        let attacker = new_attacker(cfg)?;
+        let targeter = Arc::new(targeter.attack(n));
         let mut rx = attacker.attack_until(
             targeter.clone(),
             Arc::new(DynPacer(ph.pacer.clone())),
@@ -398,8 +402,7 @@ async fn attack_profile(
             checker.apply(&mut r);
             let ok = checker.accepts(&r);
             live.add(&r, ok);
-            let op = targeter.operation(&r.method, &r.url);
-            collector.add(&r, ok, &ph.name, op.as_deref());
+            collector.add(&r, ok, &ph.name, targeter.operation(r.seq));
         }
     }
     Ok(start)

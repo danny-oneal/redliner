@@ -148,6 +148,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The warmup runs at 10% of the first phase's rate without rounding it down
   to whole requests per second (rate 15 warmed at 1 rps, not 1.5; rate 2.5 at
   1 rps, not 0.25).
+- GraphQL scenario `headers` and every harvest request's `headers` are now
+  sent. They were silently dropped, though `run_manifest.json` listed them.
+  GraphQL scenario headers take `{{pool}}` placeholders, as REST ones do.
+- A GraphQL scenario's `name` is sent as `operationName` only when its query
+  defines an operation by that name. It was always sent, so spec-compliant
+  servers rejected every anonymous query (the README's own example) with
+  `Unknown operation named ...`.
+- A fixed `load.seed` now reproduces which scenario and pool values each hit
+  sends in a profile run. All workers shared one random stream, so the draw
+  order followed task scheduling; each hit now draws from its own stream, as
+  replay hits already did. A seeded run sends different values than the same
+  seed did before.
+- Per-operation reports count every REST hit. Hits were matched back to their
+  scenario from the URL, which lost any hit whose sampled value held `/`, `&`
+  or `?`; they are now attributed by the scenario that built them.
+- REST pool values are percent-encoded where a `path` splices them in, so
+  `sku={{skus}}` with the value `a&b=c` sends one `sku` parameter, not two,
+  and a value holding `/` or `?` no longer changes the route. Only the
+  template text of `path` is sent as written; bodies and headers are
+  unchanged.
+- A GraphQL `target.url` with a query string (`/graphql?tenant=t1`) keeps
+  it intact: the `op` tag is joined with `&`. It was appended after a second
+  `?`, so the server read `tenant` as `t1?op=<scenario>`.
+- A GraphQL variable like `"{{ids}}}"` interpolates as the string `5}`
+  instead of failing every request with `unknown pool ids}`, and an empty
+  `{{}}` is reported as such instead of as `unknown pool` with no name.
+- Harvest probes accept any 2xx response (a `201`, say), not only `200`, and
+  connect as the attack does: over HTTP/2 when `target.http2` is set, and
+  without reusing connections when `target.keep_alive` is `false`.
 
 ## [0.5.1] - 2026-10-31
 

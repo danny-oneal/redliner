@@ -1,11 +1,12 @@
-use http::{HeaderMap, HeaderName, HeaderValue, Method};
+use http::{HeaderMap, HeaderValue, Method};
+use percent_encoding::utf8_percent_encode;
 use rand_chacha::ChaCha8Rng;
 use volley::Target;
 
-use super::headers::base_headers;
-use super::{EncodeError, Encoder};
+use super::headers::{base_headers, render_templates, scenario_headers, HeaderTemplate};
+use super::{EncodeError, Encoder, URL_COMPONENT};
 use crate::config::{Scenario, TargetConfig};
-use crate::data::{render_string, Pools};
+use crate::data::{render_escaped, render_string, Pools};
 
 struct RestRoute {
     name: String,
@@ -14,14 +15,6 @@ struct RestRoute {
     headers: HeaderMap,
     /// Headers whose values hold `{{pool}}` placeholders, rendered per request.
     templated: Vec<HeaderTemplate>,
-    pattern: regex::Regex,
-}
-
-struct HeaderTemplate {
-    name: HeaderName,
-    /// The key as written in the config, for error messages.
-    key: String,
-    value: String,
 }
 
 pub struct RestEncoder {
@@ -36,21 +29,7 @@ impl RestEncoder {
         let mut routes = Vec::with_capacity(scenarios.len());
         for sc in scenarios {
             let r = &sc.request;
-            // Per-route clone so scenario headers never leak into the base or other routes.
-            let mut headers = base.clone();
-            let mut templated = Vec::new();
-            for (k, v) in &r.headers {
-                let n = HeaderName::from_bytes(k.as_bytes())
-                    .map_err(|e| EncodeError::InvalidHeader(format!("{k}: {e}")))?;
-                // Checked even when templated, so a bad character fails at startup.
-                let hv = HeaderValue::from_str(v)
-                    .map_err(|e| EncodeError::InvalidHeader(format!("{k}: {e}")))?;
-                if v.contains("{{") {
-                    templated.push(HeaderTemplate { name: n, key: k.clone(), value: v.clone() });
-                } else {
-                    headers.insert(n, hv);
-                }
-            }
+            let (mut headers, templated) = scenario_headers(&base, &r.headers)?;
             if !r.body.is_empty() && !headers.contains_key("content-type") {
                 headers.insert("content-type", HeaderValue::from_static("application/json"));
             }
@@ -59,7 +38,6 @@ impl RestEncoder {
                 method: r.method.to_ascii_uppercase(),
                 headers,
                 templated,
-                pattern: path_pattern(&base_url, &r.path),
             });
         }
         Ok(Self { base_url, routes })
@@ -81,52 +59,20 @@ impl Encoder for RestEncoder {
             .ok_or_else(|| EncodeError::InvalidHeader(format!("unknown scenario {}", sc.name)))?;
         t.method = Method::from_bytes(route.method.as_bytes())
             .map_err(|e| EncodeError::InvalidHeader(format!("method {}: {e}", route.method)))?;
-        t.url = format!(
-            "{}{}",
-            self.base_url,
-            render_string(&sc.request.path, pools, rng)?
-        );
+        // Each value is encoded as one path segment or query value, so a `/`,
+        // `&` or `?` in it can't change the route or add a parameter.
+        let path = render_escaped(&sc.request.path, pools, rng, |out, v| {
+            out.extend(utf8_percent_encode(v, URL_COMPONENT))
+        })?;
+        t.url = format!("{}{}", self.base_url, path);
         t.header = route.headers.clone();
         if !sc.request.body.is_empty() {
             t.body = render_string(&sc.request.body, pools, rng)?.into_bytes();
         }
         // After the path and body, so adding a templated header to a seeded
         // config leaves the paths and bodies it draws unchanged.
-        for h in &route.templated {
-            let v = render_string(&h.value, pools, rng)?;
-            let v = HeaderValue::from_str(&v)
-                .map_err(|e| EncodeError::InvalidHeader(format!("{}: {e}", h.key)))?;
-            t.header.insert(h.name.clone(), v);
-        }
-        Ok(())
+        render_templates(&mut t.header, &route.templated, pools, rng)
     }
-
-    fn operation(&self, method: &str, url: &str) -> Option<String> {
-        self.routes
-            .iter()
-            .find(|r| r.method == method && r.pattern.is_match(url))
-            .map(|r| r.name.clone())
-    }
-}
-
-/// Anchored regex for `base+path` where each `{{...}}` placeholder matches one URL segment value.
-fn path_pattern(base: &str, path: &str) -> regex::Regex {
-    let mut pat = String::from("^");
-    let mut rest = format!("{base}{path}");
-    while let Some(i) = rest.find("{{") {
-        pat.push_str(&regex::escape(&rest[..i]));
-        pat.push_str("[^/?&]+");
-        match rest[i..].find("}}") {
-            Some(j) => rest = rest[i + j + 2..].to_string(),
-            None => {
-                rest.clear();
-                break;
-            }
-        }
-    }
-    pat.push_str(&regex::escape(&rest));
-    pat.push('$');
-    regex::Regex::new(&pat).expect("path pattern is a valid regex")
 }
 
 #[cfg(test)]
@@ -225,18 +171,6 @@ mod tests {
     }
 
     #[test]
-    fn rest_operation_matches_by_pattern() {
-        let s = sc("GetProduct", "GET", "/products/{{id}}", "", &[]);
-        let enc = RestEncoder::new(&target("http://h"), &[s]).unwrap();
-        assert_eq!(
-            enc.operation("GET", "http://h/products/42"),
-            Some("GetProduct".to_string())
-        );
-        assert_eq!(enc.operation("POST", "http://h/products/42"), None);
-        assert_eq!(enc.operation("GET", "http://h/orders/1"), None);
-    }
-
-    #[test]
     fn rest_encode_renders_path() {
         let s = sc("GetProduct", "GET", "/products/{{id}}", "", &[]);
         let enc = RestEncoder::new(&target("http://h"), std::slice::from_ref(&s)).unwrap();
@@ -245,6 +179,20 @@ mod tests {
         let mut t = Target::default();
         enc.encode(&mut t, &s, &pools, &mut rng()).unwrap();
         assert_eq!(t.url, "http://h/products/5");
+    }
+
+    #[test]
+    fn rest_path_values_are_percent_encoded() {
+        let s = sc("Search", "GET", "/p/{{v}}?q={{v}}&n=1", "{\"v\":\"{{v}}\"}", &[]);
+        let enc = RestEncoder::new(&target("http://h"), std::slice::from_ref(&s)).unwrap();
+        let mut pools = Pools::new();
+        pools.insert("v".into(), Pool::List(vec![serde_json::json!("a&b=c/d?e f#g%h+é")]));
+        let mut t = Target::default();
+        enc.encode(&mut t, &s, &pools, &mut rng()).unwrap();
+        let v = "a%26b%3Dc%2Fd%3Fe%20f%23g%25h%2B%C3%A9";
+        assert_eq!(t.url, format!("http://h/p/{v}?q={v}&n=1"));
+        // Only the URL is encoded: the body carries the value as is.
+        assert_eq!(t.body, "{\"v\":\"a&b=c/d?e f#g%h+é\"}".as_bytes());
     }
 
     #[test]

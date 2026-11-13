@@ -380,6 +380,84 @@ async fn e2e_harvest_seeds_pool_and_attacks() {
     );
 }
 
+#[tokio::test]
+async fn e2e_graphql_scenario_and_harvest_headers_are_sent() {
+    let mock = spawn_mock_seeded(Some("{\"data\":{\"products\":[{\"id\":7}]}}")).await;
+    let dir = tempdir("gql-headers");
+    let p = dir.join("cfg.yaml");
+    std::fs::write(
+        &p,
+        format!(
+            "target:\n  url: {}\n  headers:\n    X-Target: t\n\
+             load:\n  profile: constant\n  rate: 50\n  duration: 500ms\n\
+             data:\n  harvest:\n    - request:\n        query: \"{{ products {{ id }} }}\"\n        headers:\n          X-Harvest: h\n      extract:\n        ids: data.products[].id\n\
+             scenarios:\n  - name: product\n    weight: 1\n    request:\n      query: \"query product($id: Int) {{ product(id: $id) {{ name }} }}\"\n      \
+             variables:\n        id: \"{{{{ids}}}}\"\n      headers:\n        X-Scenario: \"s-{{{{ids}}}}\"\n",
+            mock.url
+        ),
+    )
+    .unwrap();
+    assert_eq!(run(args(&p, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
+    let heads = mock.heads.lock().unwrap();
+    let has = |head: &str, line: &str| head.to_ascii_lowercase().lines().any(|l| l == line);
+    assert!(has(&heads[0], "x-harvest: h") && has(&heads[0], "x-target: t"), "{}", heads[0]);
+    assert!(heads.len() > 2, "saw {} requests", heads.len());
+    for head in &heads[1..] {
+        assert!(has(head, "x-scenario: s-7") && has(head, "x-target: t"), "{head}");
+        assert!(!has(head, "x-harvest: h"), "{head}");
+    }
+}
+
+/// Values with `/`, `&`, `=` and a space in a REST path and query.
+fn write_awkward_values_cfg(dir: &std::path::Path, base: &str) -> std::path::PathBuf {
+    let p = dir.join("cfg.yaml");
+    std::fs::write(
+        &p,
+        format!(
+            "target:\n  url: {base}\n  protocol: rest\nload:\n  profile: constant\n  rate: 50\n  duration: 1s\n\
+             data:\n  pools:\n    skus: {{ type: list, values: [\"hot latte\", \"a&b=c\", \"x/y\"] }}\n\
+             scenarios:\n  - name: search\n    weight: 1\n    request:\n      path: \"/products?sku={{{{skus}}}}\"\n\
+             \x20 - name: get\n    weight: 1\n    request:\n      path: \"/products/{{{{skus}}}}\"\n"
+        ),
+    )
+    .unwrap();
+    p
+}
+
+#[tokio::test]
+async fn e2e_rest_hits_are_attributed_whatever_their_values() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("awkward-attribution");
+    let cfg = write_awkward_values_cfg(&dir, &origin(&mock));
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap(), "--live-stats", "0s"])).await, Exit::Ok);
+    let report = newest_report(&dir);
+    let total = read_metrics(&dir)["requests"].as_u64().unwrap();
+    let per_op: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report.join("per_operation.json")).unwrap()).unwrap();
+    let ops = per_op.as_array().unwrap();
+    let names: Vec<&str> = ops.iter().map(|o| o["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["get", "search"], "{per_op:#}");
+    let attributed: u64 = ops.iter().map(|o| o["requests"].as_u64().unwrap()).sum();
+    assert_eq!(attributed, total, "{per_op:#}");
+}
+
+#[tokio::test]
+async fn e2e_rest_values_are_percent_encoded_in_the_url() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("awkward-encoding");
+    let cfg = write_awkward_values_cfg(&dir, &origin(&mock));
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap(), "--live-stats", "0s"])).await, Exit::Ok);
+    let want: Vec<String> = ["hot%20latte", "a%26b%3Dc", "x%2Fy"]
+        .iter()
+        .flat_map(|v| [format!("GET /products?sku={v} HTTP/1.1"), format!("GET /products/{v} HTTP/1.1")])
+        .collect();
+    let lines = mock.lines.lock().unwrap();
+    assert!(lines.len() > 10, "saw {} requests", lines.len());
+    for l in lines.iter() {
+        assert!(want.contains(l), "unexpected request line {l:?}");
+    }
+}
+
 /// Writes `log.jsonl` (ops a,b,a,b,a 150ms apart, plus one unmatched
 /// `health` event) and a replay config with scenarios `a` and `b`.
 /// Returns `(config path, log path)`.
