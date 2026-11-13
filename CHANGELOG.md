@@ -19,6 +19,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its success rate and throughput (0% when every response was an allowed
   status) and could fail its SLOs. A report written before this fix and one
   written after it are not comparable for such a config.
+- A `user:password@` in a config file's `target.url` is a validation error, as
+  it already was for `--url`. It used to be written to `run_manifest.json`,
+  every `results.jsonl` line and the stderr banner. Use `target.auth` or a
+  header instead. A `target.url` that isn't an `http://` or `https://` URL is
+  rejected too, instead of failing every request.
 
 ## [0.5.1] - 2026-10-31
 

@@ -13,6 +13,10 @@ use serde::{Deserialize, Serialize};
 
 pub use duration::ConfigDuration;
 
+/// Why a URL with `user:password@` is refused: it would land in reports.
+pub(crate) const URL_CREDENTIALS: &str =
+    "credentials in the URL are not supported; use --header or a config with target.auth";
+
 /// Request encoder selector. Defaults to GraphQL when omitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -458,6 +462,19 @@ impl Config {
 
         if t.url.is_empty() {
             errs.push("target.url is required".into());
+        } else {
+            match reqwest::Url::parse(&t.url) {
+                Err(e) => errs.push(format!("target.url {:?}: {e}", t.url)),
+                Ok(u) if !matches!(u.scheme(), "http" | "https") => errs.push(format!(
+                    "target.url {:?}: only http and https are supported",
+                    t.url
+                )),
+                // Don't echo the URL: it holds the credentials.
+                Ok(u) if !u.username().is_empty() || u.password().is_some() => {
+                    errs.push(format!("target.url: {URL_CREDENTIALS}"))
+                }
+                Ok(_) => {}
+            }
         }
         // Go also checks target.protocol here; in Rust an unknown protocol
         // is rejected at parse time by the `Protocol` enum.

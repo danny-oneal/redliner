@@ -29,7 +29,7 @@ report:  { ... }  # optional
 
 | key          | type    | default    | notes |
 | ------------ | ------- | ---------- | ----- |
-| `url`        | string  | *required* | full endpoint for GraphQL; base URL for REST (scenario paths are appended) |
+| `url`        | string  | *required* | full endpoint for GraphQL; base URL for REST (scenario paths are appended); `http://` or `https://`, without `user:password@` (use `auth` or `headers`) |
 | `protocol`   | enum    | `graphql`  | `graphql` \| `rest` |
 | `timeout`    | duration| `10s`      | per-request timeout |
 | `headers`    | map     | `{}`       | sent on every request; credential values are redacted in `run_manifest.json` (see below) |

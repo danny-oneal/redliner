@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::config::{Config, ConfigDuration, RequestConfig, Scenario};
+use crate::config::{Config, ConfigDuration, RequestConfig, Scenario, URL_CREDENTIALS};
 
 /// Read when `--config` is not given, if it exists.
 pub const DEFAULT_CONFIG: &str = "redliner.yaml";
@@ -223,9 +223,7 @@ impl Args {
         }
         // The URL would land in reports; don't echo it either.
         if !url.username().is_empty() || url.password().is_some() {
-            return Err("--url: credentials in the URL are not supported; use --header or a \
-                        config with target.auth"
-                .into());
+            return Err(format!("--url: {URL_CREDENTIALS}"));
         }
         let method = self.method.as_deref().unwrap_or("GET").to_ascii_uppercase();
         let mut path = url.path().to_string();

@@ -560,3 +560,25 @@ fn insecure_tls_is_off_unless_set() {
     let c = load_str(&format!("{GQL_HEAD}  insecure_tls: true\n{ONE_GQL}")).unwrap();
     assert!(c.target.insecure_tls);
 }
+
+#[test]
+fn target_url_credentials_rejected() {
+    // They would land in run_manifest.json, results.jsonl and the banner.
+    for url in ["http://alice:pw@127.0.0.1:18080", "http://alice@h/graphql"] {
+        let t = err_text(load_str(&format!("target:\n  url: {url}\n{ONE_GQL}")));
+        assert!(
+            t.contains(&format!("target.url: {URL_CREDENTIALS}")),
+            "{url}: {t}"
+        );
+        assert!(!t.contains("alice"), "the URL is not echoed: {t}");
+    }
+}
+
+#[test]
+fn target_url_must_be_http_or_https() {
+    let t = err_text(load_str(&format!("target:\n  url: localhost:8080\n{ONE_GQL}")));
+    assert!(t.contains("target.url \"localhost:8080\": only http and https are supported"), "{t}");
+    let t = err_text(load_str(&format!("target:\n  url: /graphql\n{ONE_GQL}")));
+    assert!(t.contains("target.url \"/graphql\": relative URL without a base"), "{t}");
+    load_str(&format!("target:\n  url: HTTPS://h/graphql?x=1\n{ONE_GQL}")).unwrap();
+}
