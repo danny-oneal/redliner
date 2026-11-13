@@ -203,7 +203,9 @@ pub fn normalize_scalar(v: &Value) -> Value {
 }
 
 /// Walks decoded JSON along a dot path where a segment suffixed `[]` fans out
-/// over array elements (`data.menus[].items[].id`), returning every leaf.
+/// over array elements (`data.menus[].items[].id`), returning every leaf. A
+/// bare `[]` segment fans out over the current node (`[].sku` for a top-level
+/// array).
 pub fn extract_path(doc: &Value, path: &str) -> Result<Vec<Value>, DataError> {
     let err = |msg: String| DataError::Path {
         path: path.to_string(),
@@ -215,6 +217,17 @@ pub fn extract_path(doc: &Value, path: &str) -> Result<Vec<Value>, DataError> {
         let key = seg.strip_suffix("[]").unwrap_or(seg);
         let mut next = Vec::new();
         for node in &cur {
+            // A bare `[]` fans out over the node itself (a top-level array).
+            if fan_out && key.is_empty() {
+                let Value::Array(arr) = node else {
+                    return Err(err(format!(
+                        "segment {seg:?}: expected array, got {}",
+                        kind(node)
+                    )));
+                };
+                next.extend(arr.iter().cloned());
+                continue;
+            }
             let Value::Object(m) = node else {
                 return Err(err(format!(
                     "segment {seg:?}: expected object, got {}",
@@ -604,6 +617,17 @@ mod tests {
             extract_path(&doc, "data.items[].id").unwrap(),
             vec![json!(1), json!(2)]
         );
+    }
+
+    #[test]
+    fn extract_path_fans_out_over_a_top_level_array() {
+        // The common REST list shape: `[{"sku":"A1"},{"sku":"B2"}]`.
+        let doc = json!([{"sku":"A1"},{"sku":"B2","tags":["x","y"]}]);
+        assert_eq!(extract_path(&doc, "[].sku").unwrap(), vec![json!("A1"), json!("B2")]);
+        assert_eq!(extract_path(&doc, "[].tags[]").unwrap(), vec![json!("x"), json!("y")]);
+        assert_eq!(extract_path(&json!([1, 2]), "[]").unwrap(), vec![json!(1), json!(2)]);
+        let e = extract_path(&json!({"a":1}), "[].sku").unwrap_err().to_string();
+        assert_eq!(e, "path \"[].sku\": segment \"[]\": expected array, got object");
     }
 
     #[test]
