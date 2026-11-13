@@ -16,7 +16,16 @@ pub struct Phase {
     pub rate: f64,
 }
 
-pub fn build_phases(load: &LoadConfig) -> anyhow::Result<Vec<Phase>> {
+/// Config validation rules these out; they guard direct callers.
+#[derive(Debug, thiserror::Error)]
+pub enum PhaseError {
+    #[error("ramp profile needs load.duration > 0")]
+    RampDuration,
+    #[error("unsupported load profile {0:?}")]
+    UnknownProfile(String),
+}
+
+pub fn build_phases(load: &LoadConfig) -> Result<Vec<Phase>, PhaseError> {
     let dur = load.duration.as_std();
     match load.profile.as_str() {
         "constant" => Ok(vec![Phase {
@@ -34,7 +43,7 @@ pub fn build_phases(load: &LoadConfig) -> anyhow::Result<Vec<Phase>> {
         "ramp" => {
             let secs = dur.as_secs_f64();
             if secs <= 0.0 {
-                anyhow::bail!("ramp profile needs load.duration > 0");
+                return Err(PhaseError::RampDuration);
             }
             Ok(vec![Phase {
                 name: "ramp".into(),
@@ -57,7 +66,7 @@ pub fn build_phases(load: &LoadConfig) -> anyhow::Result<Vec<Phase>> {
                 rate: s.rate,
             })
             .collect()),
-        other => anyhow::bail!("unsupported load profile {other:?}"),
+        other => Err(PhaseError::UnknownProfile(other.to_string())),
     }
 }
 
@@ -129,6 +138,8 @@ mod tests {
         assert_eq!(p[0].rate, 11.0);
 
         let bad = LoadConfig { profile: "ramp".into(), ..Default::default() };
-        assert!(build_phases(&bad).is_err());
+        assert!(matches!(build_phases(&bad), Err(PhaseError::RampDuration)));
+        let bad = LoadConfig { profile: "wat".into(), ..Default::default() };
+        assert!(matches!(build_phases(&bad), Err(PhaseError::UnknownProfile(p)) if p == "wat"));
     }
 }

@@ -170,8 +170,8 @@ one request to benchmark. `redliner compare` compares two finished runs (see
 | `--method`    | —              | method of the `--url` request (no config file only; default `GET`) |
 | `--body`      | —              | body of the `--url` request (no config file only) |
 | `-H`, `--header` | `target.headers` | `"Name: value"`, repeatable; adds to the file's headers |
-| `--rate`      | `load.rate`    | requests per second                     |
-| `--duration`  | `load.duration`| Go-style duration, e.g. `30s`, `2m`     |
+| `--rate`      | `load.rate`    | requests per second (not with `ramp` or `steps`) |
+| `--duration`  | `load.duration`| Go-style duration, e.g. `30s`, `2m` (not with `steps`) |
 | `--warmup`    | `load.warmup`  | Go-style duration                       |
 | `--seed`      | `load.seed`    | fix for a reproducible run              |
 | `--out`       | `report.dir`   |                                         |
@@ -180,7 +180,7 @@ one request to benchmark. `redliner compare` compares two finished runs (see
 | `--slo-p50` / `--slo-p95` / `--slo-p99` / `--slo-p999` | `slos.p50` / `p95` / `p99` / `p999` | max latency, e.g. `200ms`; `0s` turns a file's SLO off |
 | `--slo-throughput-min` | `slos.throughput_min` | successful requests per second |
 | `-k`, `--insecure` | `target.insecure_tls` | skip TLS certificate verification (self-signed test environments only; the run warns) |
-| `--validate`  | —              | validate the config and exit `0`        |
+| `--validate`  | —              | check the config, its headers, placeholders and pool files without firing anything; exit `0` if valid, `2` if not |
 | `--replay`    | `replay.source`| replay a JSONL/HAR log instead of a load profile |
 | `--speed`     | `replay.speed` | replay time compression (needs replay)  |
 | `--copies`    | `replay.copies`| concurrent copies of the log (needs replay) |

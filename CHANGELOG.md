@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- `scenarios[].weight` defaults to `1`, so a one-scenario config (the README's
+  "minimal config") no longer needs it. An explicit `0` or negative weight is
+  still an error.
+
 ### Removed
 - Release archives for Windows, Intel macOS, ARM Linux and glibc Linux.
   Releases ship two targets: static x86_64 Linux (musl) and Apple Silicon
@@ -26,6 +31,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its success rate and throughput (0% when every response was an allowed
   status) and could fail its SLOs. A report written before this fix and one
   written after it are not comparable for such a config.
+- A `user:password@` in a config file's `target.url` is a validation error, as
+  it already was for `--url`. It used to be written to `run_manifest.json`,
+  every `results.jsonl` line and the stderr banner. Use `target.auth` or a
+  header instead. A `target.url` that isn't an `http://` or `https://` URL is
+  rejected too, instead of failing every request.
+- `--validate` catches configs that would fail every request or stop the run
+  before traffic, and so does every run, before it creates a report dir: a
+  REST `path` without a leading `/`, an invalid HTTP method, an invalid header
+  name or value, a `{{placeholder}}` that names no pool or harvest `extract`
+  key, and (`--validate` now builds the pools) a missing or unreadable file
+  pool. An unset `token_env`-style variable, which fails a run, is a warning
+  under `--validate`, so configs can be checked without the secret.
+- Harvest can extract from a response that is a top-level JSON array
+  (`extract: { skus: "[].sku" }`), as the docs said `[]` would. A path that
+  doesn't fit the response now names its pool in the error.
+- Pool validation: a file pool's `as` must be `string` or `int` (`as: Int`
+  used to mean string), a `range` pool needs `min`/`max` (it used to yield
+  only `0`), and a field the pool's type doesn't use (`as` on a `list`, `min`
+  on a `sequence`) is an error instead of being ignored. A negative
+  `target.max_idle_conns` is rejected; it used to turn connection pooling off.
+- A `weight` of `.nan` or `.inf`, or weights whose total overflows, is
+  rejected instead of leaving a scenario that never fires.
+- A `checks.status` entry outside 100–599 is rejected; it used to wrap
+  around (`65736` meant `200`).
+- `--rate` (or `load.rate`) with a `ramp` or `steps` profile, and
+  `--duration` (or `load.duration`) with `steps`, are errors instead of being
+  silently ignored.
 - Two runs started in the same second into the same report directory
   (parallel CI jobs, say) no longer share one run folder and overwrite each
   other's files: the later one gets `<timestamp>-1`, `-2`, …, and `latest`
