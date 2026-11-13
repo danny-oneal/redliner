@@ -25,7 +25,7 @@ pub struct Matched {
 pub struct MatchResult {
     /// In trace order.
     pub matched: Vec<Matched>,
-    /// Keyed by scenario name; only scenarios with at least one match.
+    /// Keyed by scenario name; every scenario with a match rule, even at 0.
     pub per_scenario: BTreeMap<String, u64>,
     pub unmatched: u64,
     /// The most frequent unmatched `"{method} {path}[ op={operation}]"`
@@ -40,19 +40,19 @@ enum Rule {
 }
 
 impl Rule {
-    fn compile(m: &MatchConfig, protocol: Protocol) -> Option<Rule> {
+    fn compile(m: &MatchConfig, protocol: Protocol) -> Result<Option<Rule>, regex::Error> {
         match protocol {
             Protocol::Graphql => {
-                (!m.operation.is_empty()).then(|| Rule::Operation(m.operation.clone()))
+                Ok((!m.operation.is_empty()).then(|| Rule::Operation(m.operation.clone())))
             }
             Protocol::Rest => {
                 if m.path.is_empty() {
-                    return None;
+                    return Ok(None);
                 }
-                Some(Rule::Rest {
+                Ok(Some(Rule::Rest {
                     method: (!m.method.is_empty()).then(|| m.method.clone()),
-                    path: glob_regex(&m.path),
-                })
+                    path: glob_regex(&m.path)?,
+                }))
             }
         }
     }
@@ -71,8 +71,9 @@ impl Rule {
 }
 
 /// `**` matches anything, `*` matches within one path segment, everything
-/// else is literal. Anchored at both ends.
-fn glob_regex(glob: &str) -> Regex {
+/// else is literal. Anchored at both ends. Fails only when the compiled
+/// pattern exceeds the regex size limit (an absurdly long glob).
+fn glob_regex(glob: &str) -> Result<Regex, regex::Error> {
     let mut pattern = String::from("^");
     let mut literal = String::new();
     let mut chars = glob.chars().peekable();
@@ -92,7 +93,7 @@ fn glob_regex(glob: &str) -> Regex {
     }
     pattern.push_str(&regex::escape(&literal));
     pattern.push('$');
-    Regex::new(&pattern).expect("escaped glob is a valid regex")
+    Regex::new(&pattern)
 }
 
 fn event_key(ev: &RawEvent) -> String {
@@ -109,12 +110,25 @@ pub fn match_events(
     scenarios: &[Scenario],
     protocol: Protocol,
 ) -> Result<MatchResult, ReplayError> {
-    let rules: Vec<Option<Rule>> = scenarios
+    let rules = scenarios
         .iter()
-        .map(|s| s.matcher.as_ref().and_then(|m| Rule::compile(m, protocol)))
-        .collect();
+        .map(|s| match &s.matcher {
+            Some(m) => Rule::compile(m, protocol).map_err(|source| ReplayError::Glob {
+                scenario: s.name.clone(),
+                source,
+            }),
+            None => Ok(None),
+        })
+        .collect::<Result<Vec<Option<Rule>>, _>>()?;
 
     let mut result = MatchResult::default();
+    // Every scenario with a rule is listed, so one that matched nothing
+    // (a typo'd operation, say) shows up as 0.
+    for (s, r) in scenarios.iter().zip(&rules) {
+        if r.is_some() {
+            result.per_scenario.insert(s.name.clone(), 0);
+        }
+    }
     let mut unmatched: BTreeMap<String, u64> = BTreeMap::new();
     for ev in &trace.events {
         let mut hits = rules
@@ -321,6 +335,28 @@ mod tests {
         assert_eq!(r.unmatched_top[2], ("GET /b".to_string(), 3));
         assert_eq!(r.unmatched_top[3], ("GET /z00".to_string(), 1));
         assert_eq!(r.unmatched_top[9], ("GET /z06".to_string(), 1));
+    }
+
+    #[test]
+    fn scenario_with_no_matches_is_counted_as_zero() {
+        // A typo'd rule must show up in the summary with 0, not vanish.
+        let scenarios = [gql("a", "GetSku"), gql("typo", "GetSkuu")];
+        let t = trace(vec![ev(1, "POST", "/graphql", Some("GetSku"))]);
+        let r = match_events(&t, &scenarios, Protocol::Graphql).unwrap();
+        assert_eq!(
+            r.per_scenario,
+            BTreeMap::from([("a".to_string(), 1), ("typo".to_string(), 0)])
+        );
+    }
+
+    #[test]
+    fn oversized_glob_is_an_error_not_a_panic() {
+        let path = format!("/{}", "*/".repeat(100_000));
+        let scenarios = [rest("huge", "", &path)];
+        let t = trace(vec![ev(1, "GET", "/a", None)]);
+        let err = match_events(&t, &scenarios, Protocol::Rest).unwrap_err();
+        assert!(matches!(err, ReplayError::Glob { .. }), "{err}");
+        assert!(err.to_string().contains("scenario \"huge\""), "{err}");
     }
 
     #[test]

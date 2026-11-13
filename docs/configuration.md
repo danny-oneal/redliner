@@ -249,7 +249,8 @@ replay: configs/replay-sample.jsonl
 
 `hits` is what will fire (after `copies`), `span` the replay duration (after
 `speed`), and `peak` the most hits in any one-second window. Matched counts
-are per scenario before `copies`. Results are attributed to scenarios by name
+are per scenario before `copies`; every scenario with a `match` is listed, so
+one whose rule matched nothing (a typo'd `operation`, say) shows `0`. Results are attributed to scenarios by name
 in the per-operation report, as in a profile run. After every real run (not
 `--validate`) the block and manifest also carry a `fired` line
 (`fired : 14 of 16 (2 dropped)`), and the SLO results gain a

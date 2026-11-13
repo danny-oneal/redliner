@@ -22,6 +22,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Replay: when no events are left to replay, the error now shows the first
   three malformed-line reasons (`line 1: missing field "ts"`), not only the
   counts, so a wrong `replay.fields` mapping says what is wrong.
+- Replay: the summary lists every scenario with a `match` rule, so one that
+  matched nothing (a typo'd `match.operation`) shows `0` instead of being
+  left out.
 
 ## [0.5.1] - 2026-10-31
 

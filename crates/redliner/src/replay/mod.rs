@@ -39,6 +39,12 @@ pub enum ReplayError {
         first: String,
         second: String,
     },
+    #[error("replay: scenario {scenario:?}: match.path is too long to compile")]
+    Glob {
+        scenario: String,
+        #[source]
+        source: regex::Error,
+    },
     #[error("replay: {count} log events matched no scenario (on_unmatched: fail); most frequent: {top}")]
     Unmatched { count: u64, top: String },
     #[error("replay: no events left to replay (parsed {parsed}, malformed {malformed}, outside window {filtered}, unmatched {unmatched}){}", first_malformed(.malformed_examples))]
