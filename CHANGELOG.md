@@ -7,9 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Removed
-- Windows release archives. Releases ship Linux (x86_64 glibc and musl,
-  aarch64 musl) and macOS (Apple Silicon and Intel) binaries; on Windows,
-  build from source (`cargo install --path crates/redliner`).
+- Release archives for Windows, Intel macOS, ARM Linux and glibc Linux.
+  Releases ship two targets: static x86_64 Linux (musl) and Apple Silicon
+  macOS. `install.sh` now stops with a build-from-source hint on ARM Linux
+  and Intel macOS; elsewhere, build from source (`cargo install --git
+  https://github.com/danny-oneal/redliner redliner redliner-import --locked`).
 
 ### Added
 - `volley::Metrics::add_with_success`, for callers whose idea of success is

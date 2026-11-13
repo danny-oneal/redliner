@@ -52,7 +52,7 @@ binary (`redliner`).
 
 ## Install
 
-**Prebuilt binaries** (Linux x86_64/arm64, macOS). The script picks the release
+**Prebuilt binaries** (Linux x86_64, macOS on Apple Silicon). The script picks the release
 asset for your platform, checks it against the release's SHA-256 checksum, and
 installs `redliner` and [`redliner-import`](#scaffold-a-config-from-a-schema)
 to `~/.local/bin`:
@@ -63,8 +63,9 @@ curl -fsSL https://raw.githubusercontent.com/danny-oneal/redliner/main/scripts/i
 
 Set `REDLINER_VERSION=v0.2.0` to pin a release or `REDLINER_INSTALL_DIR` to
 install elsewhere. The Linux binaries are static (musl), so they run on any
-distro and in `scratch`/distroless images. Releases ship Linux and macOS
-binaries only; on Windows, build from source.
+distro and in `scratch`/distroless images. Releases ship Linux x86_64 and
+Apple Silicon macOS binaries only; anywhere else (ARM Linux, Intel macOS,
+Windows), build from source.
 
 **From source** needs a **Rust toolchain ≥ 1.88** ([rustup](https://rustup.rs)).
 
