@@ -27,6 +27,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   send times for a given `load.seed`.
 - `redliner-volley`: `PoissonPacer` stops on a NaN or infinite rate instead
   of panicking in the scheduler task.
+- Memory no longer grows with every request fired (~1.5 KB a hit, so a
+  1000 rps hour-long soak needed ~5.5 GB): finished worker tasks are
+  released as the attack goes instead of at its end.
+- A hit whose worker task panics is reported as a failed request
+  (`worker panicked: …`) instead of vanishing from the counts.
 
 ## [0.5.1] - 2026-10-31
 

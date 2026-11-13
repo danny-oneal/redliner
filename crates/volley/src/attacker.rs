@@ -1,11 +1,12 @@
 //! The async paced attack loop — the engine core (Go `vegeta.Attacker.Attack`).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use tokio::sync::{mpsc, watch};
 use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
+use tokio::task::{self, JoinError, JoinSet};
 
 use crate::pacer::{Pacer, Targeter};
 use crate::target::{AttackResult, Target};
@@ -121,6 +122,8 @@ impl Attacker {
             let start = Instant::now();
             let mut hits: u64 = 0;
             let mut workers: JoinSet<()> = JoinSet::new();
+            // The hit each live worker fires, to report one that panics.
+            let mut in_flight: HashMap<task::Id, u64> = HashMap::new();
 
             loop {
                 if *stop.borrow() {
@@ -153,6 +156,11 @@ impl Attacker {
                     _ = stopped(&mut stop) => break,
                 };
 
+                // A JoinSet keeps every finished task until it is joined.
+                while let Some(done) = workers.try_join_next_with_id() {
+                    reap(done, &mut in_flight, &tx, &name).await;
+                }
+
                 let seq = hits;
                 hits += 1;
 
@@ -161,17 +169,21 @@ impl Attacker {
                 let targeter = targeter.clone();
                 let name = name.clone();
 
-                workers.spawn(async move {
-                    let result = run_hit(&client, targeter.as_ref(), name, seq).await;
-                    let _ = tx.send(result).await;
-                    drop(permit);
-                });
+                let id = workers
+                    .spawn(async move {
+                        let result = run_hit(&client, targeter.as_ref(), name, seq).await;
+                        let _ = tx.send(result).await;
+                        drop(permit);
+                    })
+                    .id();
+                in_flight.insert(id, seq);
             }
 
-            // Drop the scheduler's own sender so the channel can close once the
-            // workers (which hold the remaining clones) finish.
+            while let Some(done) = workers.join_next_with_id().await {
+                reap(done, &mut in_flight, &tx, &name).await;
+            }
+            // Drop the scheduler's own sender, the last one, to close the channel.
             drop(tx);
-            while workers.join_next().await.is_some() {}
         });
 
         rx
@@ -183,6 +195,45 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
     if stop.wait_for(|s| *s).await.is_err() {
         std::future::pending::<()>().await;
     }
+}
+
+/// Forgets a finished worker. One that panicked never sent its result, so
+/// its hit is reported here as a failure instead of vanishing from the counts.
+async fn reap(
+    done: Result<(task::Id, ()), JoinError>,
+    in_flight: &mut HashMap<task::Id, u64>,
+    tx: &mpsc::Sender<AttackResult>,
+    name: &str,
+) {
+    let e = match done {
+        Ok((id, ())) => {
+            in_flight.remove(&id);
+            return;
+        }
+        Err(e) => e,
+    };
+    let Some(seq) = in_flight.remove(&e.id()) else { return };
+    let Ok(panic) = e.try_into_panic() else { return };
+    let msg = panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("");
+    let _ = tx
+        .send(AttackResult {
+            attack: name.to_string(),
+            seq,
+            code: 0,
+            timestamp: SystemTime::now(),
+            latency: Duration::ZERO,
+            bytes_in: 0,
+            bytes_out: 0,
+            error: Some(format!("worker panicked: {msg}")),
+            method: String::new(),
+            url: String::new(),
+            body: Vec::new(),
+        })
+        .await;
 }
 
 /// Builds and issues one request, mapping the outcome into an [`AttackResult`].
@@ -555,6 +606,52 @@ mod tests {
             t.url = self.url.clone();
             Ok(())
         }
+    }
+
+    /// Panics on hit 1; every other hit fails without any I/O.
+    struct PanicTargeter;
+
+    impl Targeter for PanicTargeter {
+        fn target(&self, seq: u64, _t: &mut Target) -> Result<(), Error> {
+            if seq == 1 {
+                panic!("boom");
+            }
+            Err(Error::Build("no target".into()))
+        }
+    }
+
+    /// Fires three hits at once, then stops.
+    struct ThreeHits;
+
+    impl Pacer for ThreeHits {
+        fn pace(&self, _elapsed: Duration, hits: u64) -> (Duration, bool) {
+            (Duration::ZERO, hits >= 3)
+        }
+
+        fn rate(&self, _elapsed: Duration) -> f64 {
+            0.0
+        }
+    }
+
+    #[tokio::test]
+    async fn attack_reports_a_panicked_worker_as_a_failed_hit() {
+        let attacker = Attacker::new(cfg(Duration::from_secs(5))).unwrap();
+        let mut rx = attacker.attack(
+            Arc::new(PanicTargeter),
+            Arc::new(ThreeHits),
+            Duration::from_secs(30),
+            "panic".to_string(),
+        );
+        let mut results = Vec::new();
+        while let Some(r) = rx.recv().await {
+            results.push(r);
+        }
+
+        results.sort_by_key(|r| r.seq);
+        assert_eq!(results.iter().map(|r| r.seq).collect::<Vec<_>>(), [0, 1, 2]);
+        let r = &results[1];
+        assert_eq!(r.error.as_deref(), Some("worker panicked: boom"));
+        assert_eq!((r.code, r.attack.as_str()), (0, "panic"));
     }
 
     #[tokio::test]
