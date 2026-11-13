@@ -32,9 +32,7 @@ growing the load tester. The YAML config is the contract between them.
 
 Firing traffic; GraphQL mutations, subscriptions and fragments; synthesizing
 meaningful values or request bodies from JSON Schema (examples only); external
-`$ref`s; shipping the importer in release tarballs, `scripts/install.sh` or the
-Docker image (v1 installs with `cargo install --path crates/redliner-import`);
-other sources (gRPC reflection, Postman, HAR).
+`$ref`s; other sources (gRPC reflection, Postman, HAR).
 
 ## Decisions
 
@@ -151,4 +149,6 @@ writes `target.auth: {type: bearer, token_env: VAR}`.
   manual merge.
 - OpenAPI paths come out in sorted order, not document order: `serde_json` maps
   sort their keys.
-- Not in the release artifacts yet; install with `cargo install`.
+- Since v0.5.1 it ships next to `redliner` in the release archives (x86_64
+  Linux musl and Apple Silicon macOS), `scripts/install.sh` and the Docker
+  image; on any other platform, install with `cargo install`.
