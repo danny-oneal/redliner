@@ -102,7 +102,12 @@ pub fn base_url(
         Ok(_) => raw,
         Err(_) => spec_url
             .and_then(|base| base.join(&raw).ok())
-            .map(|u| u.to_string())
+            .map(|mut u| {
+                // "", "#" and "?x" keep the spec URL's query, which can be a token.
+                u.set_query(None);
+                u.set_fragment(None);
+                u.to_string()
+            })
             .ok_or(ImportError::NoBaseUrl)?,
     };
     http_only(absolute.trim_end_matches('/').to_string())
@@ -358,6 +363,18 @@ mod tests {
         let bare = json!({"openapi": "3.0.0"});
         let spec = reqwest::Url::parse("http://h/openapi.json").unwrap();
         assert_eq!(base_url(&bare, v3, Some(&spec), None).unwrap(), "http://h");
+    }
+
+    #[test]
+    fn relative_server_never_inherits_the_spec_urls_query() {
+        // RFC 3986: an empty, fragment-only or query-only reference keeps the
+        // base's query, which can be a token.
+        let spec = reqwest::Url::parse("http://h/openapi.json?token=SECRET#f").unwrap();
+        for server in ["", "#", "?x=1"] {
+            let doc = json!({"openapi": "3.0.0", "servers": [{"url": server}]});
+            let url = base_url(&doc, Version::OpenApi3, Some(&spec), None).unwrap();
+            assert_eq!(url, "http://h/openapi.json", "{server:?}");
+        }
     }
 
     #[test]
