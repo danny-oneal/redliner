@@ -94,9 +94,9 @@ pins the engine to exactly that version. Don't tag by hand. To cut a release:
 
 Pushes to `main` that don't change the version build nothing. A hand-pushed
 tag that doesn't match the crate version fails the workflow. A PR that touches
-the workflow, the release scripts or the workspace `Cargo.toml` runs the same
-builds without publishing. `make test-install` and `make test-release` test
-the scripts locally.
+the workflow, the release scripts, a `Cargo.toml` or `Cargo.lock` runs the
+same builds without publishing. `make test-install` and `make test-release`
+test the scripts locally.
 
 The crates go to crates.io, engine first: `cargo publish -p redliner-volley`,
 then `cargo publish -p redliner`, then `cargo publish -p redliner-import`

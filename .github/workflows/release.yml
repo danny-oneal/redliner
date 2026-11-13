@@ -10,8 +10,9 @@ on:
     branches: [main]
     # Only to reject a hand-pushed tag that doesn't match the crate version.
     tags: ["v*"]
-  # Build (but don't publish) when the release pipeline itself changes, so a
-  # broken target shows up in review instead of on the next release.
+  # Build (but don't publish) when the release pipeline or the dependencies
+  # change, so a broken target shows up in review instead of on the next
+  # release.
   pull_request:
     paths:
       - .github/workflows/release.yml
@@ -19,6 +20,8 @@ on:
       - scripts/release.sh
       - scripts/changelog-section.sh
       - Cargo.toml
+      - Cargo.lock
+      - crates/*/Cargo.toml
 
 permissions:
   contents: write
