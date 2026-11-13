@@ -39,12 +39,19 @@ pub enum ReplayError {
         first: String,
         second: String,
     },
+    #[error("replay: scenario {scenario:?}: match.path is too long to compile")]
+    Glob {
+        scenario: String,
+        #[source]
+        source: regex::Error,
+    },
     #[error("replay: {count} log events matched no scenario (on_unmatched: fail); most frequent: {top}")]
     Unmatched { count: u64, top: String },
-    #[error("replay: no events left to replay (parsed {parsed}, malformed {malformed}, outside window {filtered}, unmatched {unmatched})")]
+    #[error("replay: no events left to replay (parsed {parsed}, malformed {malformed}, outside window {filtered}, unmatched {unmatched}){}", first_malformed(.malformed_examples))]
     Empty {
         parsed: u64,
         malformed: u64,
+        malformed_examples: Vec<String>,
         filtered: u64,
         unmatched: u64,
     },
@@ -54,6 +61,15 @@ pub enum ReplayError {
     SpanTooLong { span: String },
     #[error("replay: config has no replay block")]
     NotConfigured,
+}
+
+/// `ReplayError::Empty`'s suffix: the first malformed-line reasons, if any.
+fn first_malformed(examples: &[String]) -> String {
+    if examples.is_empty() {
+        String::new()
+    } else {
+        format!("; first malformed: {}", examples.join("; "))
+    }
 }
 
 /// What the replay will do, for the pre-run banner and the run manifest.
@@ -165,6 +181,7 @@ pub fn build_replay(cfg: &Config) -> Result<Replay, ReplayError> {
         return Err(ReplayError::Empty {
             parsed,
             malformed: trace.malformed,
+            malformed_examples: trace.malformed_examples,
             filtered: trace.filtered,
             unmatched: res.unmatched,
         });
@@ -295,7 +312,24 @@ mod tests {
         let err = build_replay(&config(temp_log("empty", &log), "skip")).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "replay: no events left to replay (parsed 2, malformed 1, outside window 0, unmatched 2)"
+            "replay: no events left to replay (parsed 2, malformed 1, outside window 0, unmatched 2); \
+             first malformed: line 3: invalid JSON: expected ident at line 1 column 2"
+        );
+    }
+
+    #[test]
+    fn build_replay_all_malformed_shows_reasons() {
+        // An ECS-shaped log read with the default field names: every line is
+        // malformed, and the error must say why, not just count.
+        let log = [
+            r#"{"@timestamp":"2026-10-20T14:00:00Z","http":{"method":"POST"}}"#,
+            r#"{"@timestamp":"2026-10-20T14:00:01Z","http":{"method":"POST"}}"#,
+        ];
+        let err = build_replay(&config(temp_log("all-malformed", &log), "skip")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "replay: no events left to replay (parsed 0, malformed 2, outside window 0, unmatched 0); \
+             first malformed: line 1: missing field \"ts\"; line 2: missing field \"ts\""
         );
     }
 

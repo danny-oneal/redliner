@@ -36,8 +36,10 @@ make run CONFIG=configs/rest-example.yaml
 make validate CONFIG=configs/rest-example.yaml
 ```
 
-CI runs `make test` and `make lint`; both must pass. Keep clippy clean —
-warnings are errors.
+CI runs `make lint`, `make test`, `cargo +1.88 check` (MSRV), `cargo package
+--workspace` (every crate publishable), `make test-install` (shellcheck +
+`scripts/install.sh` against a fake release) and `make test-release` (the
+release scripts); all must pass. Keep clippy clean — warnings are errors.
 
 ## Testing
 
@@ -94,9 +96,15 @@ pins the engine to exactly that version. Don't tag by hand. To cut a release:
 
 Pushes to `main` that don't change the version build nothing. A hand-pushed
 tag that doesn't match the crate version fails the workflow. A PR that touches
-the workflow, the release scripts or the workspace `Cargo.toml` runs the same
-builds without publishing. `make test-install` and `make test-release` test
-the scripts locally.
+the workflow, the release scripts, a `Cargo.toml` or `Cargo.lock` runs the
+same builds without publishing. `make test-install` and `make test-release`
+test the scripts locally.
+
+If the publish step fails after it created the release (an asset upload
+failed, say), the tag `vX.Y.Z` now exists, so a re-run sees the version as
+released and builds nothing. Delete the release and its tag
+(`gh release delete vX.Y.Z --cleanup-tag`), then re-run all jobs of the
+merge's Release workflow run.
 
 The crates go to crates.io, engine first: `cargo publish -p redliner-volley`,
 then `cargo publish -p redliner`, then `cargo publish -p redliner-import`
