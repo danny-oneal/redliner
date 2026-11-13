@@ -195,7 +195,8 @@ a physical file line.
 Replay needs at least one scenario with a `match`. Every parse, match, and
 schedule failure is exit `2` and happens **before any request is fired**.
 The run also exits `2` when nothing is left to send (every entry malformed,
-outside the window, or unmatched); the error lists the counts. The effective
+outside the window, or unmatched); the error lists the counts and the first
+three malformed-line reasons. The effective
 span after `speed` must be at most 24h — a larger one (usually a wrong
 timestamp unit or an outlier) is also exit `2`, so check the units, narrow
 `replay.window`, or raise `--speed`.
