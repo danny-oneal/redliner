@@ -158,7 +158,7 @@ pub struct MatchConfig {
 }
 
 /// Replay a production request log at its recorded pace.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ReplayConfig {
     /// Log file; a relative path resolves against the config directory.
@@ -174,6 +174,22 @@ pub struct ReplayConfig {
     /// What to do with entries no scenario matches: skip | fail.
     pub on_unmatched: String,
     pub fields: ReplayFields,
+}
+
+// `speed` and `copies` default to 1 here rather than in `apply_defaults`, so
+// an explicit `0` (YAML or `--speed`/`--copies`) reaches validation.
+impl Default for ReplayConfig {
+    fn default() -> Self {
+        ReplayConfig {
+            source: String::new(),
+            format: String::new(),
+            window: None,
+            speed: 1.0,
+            copies: 1,
+            on_unmatched: String::new(),
+            fields: ReplayFields::default(),
+        }
+    }
 }
 
 /// RFC3339 timestamps bounding the replayed slice of the log.
@@ -409,12 +425,6 @@ impl Config {
                 }
                 .into();
             }
-            if r.speed == 0.0 {
-                r.speed = 1.0;
-            }
-            if r.copies == 0 {
-                r.copies = 1;
-            }
             if r.on_unmatched.is_empty() {
                 r.on_unmatched = "skip".into();
             }
@@ -491,7 +501,7 @@ impl Config {
         let l = &self.load;
         if let Some(r) = &self.replay {
             validate_load_for_replay(l, &mut errs);
-            validate_replay(r, &mut errs);
+            validate_replay(r, &self.scenarios, t.protocol, &mut errs);
         } else {
             match l.profile.as_str() {
                 "constant" | "poisson" => {
@@ -705,7 +715,12 @@ fn validate_load_for_replay(l: &LoadConfig, errs: &mut Vec<String>) {
     }
 }
 
-fn validate_replay(r: &ReplayConfig, errs: &mut Vec<String>) {
+fn validate_replay(
+    r: &ReplayConfig,
+    scenarios: &[Scenario],
+    protocol: Protocol,
+    errs: &mut Vec<String>,
+) {
     if r.source.is_empty() {
         errs.push("replay.source is required".into());
     }
@@ -717,6 +732,9 @@ fn validate_replay(r: &ReplayConfig, errs: &mut Vec<String>) {
     }
     if !(r.speed.is_finite() && r.speed > 0.0) {
         errs.push("replay.speed must be > 0".into());
+    }
+    if r.copies == 0 {
+        errs.push("replay.copies must be > 0".into());
     }
     if !matches!(r.on_unmatched.as_str(), "skip" | "fail") {
         errs.push(format!(
@@ -732,6 +750,29 @@ fn validate_replay(r: &ReplayConfig, errs: &mut Vec<String>) {
                 }
             }
             _ => errs.push("replay.window.start/end must both be RFC3339 timestamps".into()),
+        }
+    }
+    // Identical rules always collide; rules that merely overlap (globs, an
+    // omitted method) are caught against the log as ReplayError::Ambiguous.
+    let mut rules: BTreeMap<(String, String), &str> = BTreeMap::new();
+    for s in scenarios {
+        let rule = match (&s.matcher, protocol) {
+            (Some(m), Protocol::Graphql) if !m.operation.is_empty() => {
+                (m.operation.clone(), String::new())
+            }
+            (Some(m), Protocol::Rest) if !m.path.is_empty() => {
+                (m.method.to_ascii_uppercase(), m.path.clone())
+            }
+            _ => continue,
+        };
+        match rules.get(&rule) {
+            Some(first) => errs.push(format!(
+                "scenario {:?}: same match rule as scenario {first:?}; make the match rules disjoint",
+                s.name
+            )),
+            None => {
+                rules.insert(rule, &s.name);
+            }
         }
     }
 }
