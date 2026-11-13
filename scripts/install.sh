@@ -37,9 +37,7 @@ os=$(uname -s)
 arch=$(uname -m)
 case "$os/$arch" in
     Linux/x86_64) target=x86_64-unknown-linux-musl ;;
-    Linux/aarch64 | Linux/arm64) target=aarch64-unknown-linux-musl ;;
     Darwin/arm64) target=aarch64-apple-darwin ;;
-    Darwin/x86_64) target=x86_64-apple-darwin ;;
     *) die "no prebuilt binary for $os/$arch; build from source: cargo install --git https://github.com/$repo redliner redliner-import --locked" ;;
 esac
 
