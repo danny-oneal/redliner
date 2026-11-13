@@ -13,8 +13,9 @@ pub enum Version {
     OpenApi3,
 }
 
-/// Parses `text` as JSON, else as YAML.
+/// Parses `text` as JSON, else as YAML; a leading UTF-8 BOM is skipped.
 pub fn load_doc(text: &str) -> Result<Value, ImportError> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     if let Ok(v) = serde_json::from_str(text) {
         return Ok(v);
     }
@@ -316,7 +317,7 @@ pub fn body_example(doc: &Value, ver: Version, op: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{petstore2, petstore3};
+    use crate::testutil::{petstore2, petstore3, PETSTORE3_YAML};
     use crate::ImportError;
     use serde_json::json;
 
@@ -325,6 +326,16 @@ mod tests {
         assert_eq!(load_doc(r#"{"a":1}"#).unwrap(), json!({"a": 1}));
         assert_eq!(load_doc("a: 1\nb: [x]\n").unwrap(), json!({"a": 1, "b": ["x"]}));
         assert!(matches!(load_doc("{"), Err(ImportError::Decode { .. })));
+    }
+
+    #[test]
+    fn load_doc_skips_a_utf8_bom() {
+        // PowerShell 5's Out-File and older Notepad write one.
+        assert_eq!(load_doc("\u{feff}a: 1\n").unwrap(), json!({"a": 1}));
+        assert_eq!(load_doc("\u{feff}a: 1\nb:\n  c: {d: e}\n").unwrap(), json!({"a": 1, "b": {"c": {"d": "e"}}}));
+        let spec = format!("\u{feff}{PETSTORE3_YAML}");
+        assert_eq!(load_doc(&spec).unwrap(), load_doc(PETSTORE3_YAML).unwrap());
+        assert_eq!(load_doc("\u{feff}{\"a\":1}").unwrap(), json!({"a": 1}));
     }
 
     #[test]

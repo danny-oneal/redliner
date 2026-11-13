@@ -31,6 +31,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - A parameter whose example is an array or object gets a TODO naming its
     serialization style, and an array sends its first element, instead of
     silently sending the example as JSON text (`?tags=["red","blue"]`).
+  - A spec file that starts with a UTF-8 byte-order mark (PowerShell 5's
+    `Out-File`, older Notepad) loads instead of failing with "more than one
+    document".
 
 ## [0.5.1] - 2026-10-31
 
