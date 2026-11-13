@@ -10,7 +10,6 @@ keywords = ["load-testing", "http", "benchmark", "async", "tokio"]
 categories = ["network-programming", "development-tools::testing"]
 
 [dependencies]
-futures = "0.3.34"
 hdrhistogram = "7.5.4"
 http = "1.5.0"
 rand = "0.10.3"

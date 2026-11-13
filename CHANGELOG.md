@@ -17,6 +17,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   macOS. `install.sh` now stops with a build-from-source hint on ARM Linux
   and Intel macOS; elsewhere, build from source (`cargo install --git
   https://github.com/danny-oneal/redliner redliner redliner-import --locked`).
+- `redliner-volley` (breaking): the never-constructed `Error::Http` and
+  `Error::Timeout` variants, and the unused `futures` dependency. A failed
+  request was always reported in `AttackResult::error`, never as these.
 
 ### Added
 - `volley::Metrics::add_with_success`, for callers whose idea of success is
@@ -150,6 +153,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - An OpenAPI header parameter whose name is not a valid HTTP header name
     (`X Trace`, say) is skipped with a note, instead of producing a draft
     that `redliner --validate` rejects.
+- The `poisson` profile (the default) now fires a Poisson process. It used
+  to track the mean rate within about one hit, a near-constant load with
+  little of the burstiness that drives queueing and tail latency (per-second
+  counts had an index of dispersion of ~0.015 instead of ~1). Expect higher
+  tail latencies than before at the same `rate`, and a different sequence of
+  send times for a given `load.seed`.
+- `redliner-volley`: `PoissonPacer` stops on a NaN or infinite rate instead
+  of panicking in the scheduler task.
+- Memory no longer grows with every request fired (~1.5 KB a hit, so a
+  1000 rps hour-long soak needed ~5.5 GB): finished worker tasks are
+  released as the attack goes instead of at its end.
+- A hit whose worker task panics is reported as a failed request
+  (`worker panicked: …`) instead of vanishing from the counts.
+- Transport errors name their kind and cause and leave out the URL, e.g.
+  `connect: error sending request: client error (Connect): tcp connect
+  error: Connection refused (os error 111)` or `timeout: error sending
+  request: operation timed out`. They used to read `error sending request
+  for url (…)` whatever the cause, so a timeout looked like a refused
+  connection, and every distinct URL added one more "distinct" error to
+  the summary and `metrics.json` (millions on a long run against a target
+  that went down). The list of distinct errors is also capped at 1000.
+- Above ~1000 rps, hits are spaced evenly instead of fired in 1 ms bursts
+  (at 5000 rps ~80% of hits went out within 50 µs of the previous one).
+  The scheduler sleeps to within a millisecond of each hit and spins the
+  rest, so such rates keep up to one core busy.
+- The warmup and every phase share one HTTP client, so the measured run
+  starts on the warmup's open connections and each `steps` phase on the
+  last one's. A fresh client per phase put cold TCP/TLS handshakes into the
+  first latencies of every phase.
+- The summary's `elapsed` and the JUnit `time` cover the measured run only;
+  they included the unmeasured warmup.
+- A latency SLO is judged at the microsecond precision the summary shows.
+  It compared the histogram's bucket edge, a few hundred nanoseconds above
+  the real value, so a p50 of exactly 1ms failed `p50: 1ms` and printed as
+  `target <= 1ms observed 1ms`.
+- The warmup runs at 10% of the first phase's rate without rounding it down
+  to whole requests per second (rate 15 warmed at 1 rps, not 1.5; rate 2.5 at
+  1 rps, not 0.25).
 - GraphQL scenario `headers` and every harvest request's `headers` are now
   sent. They were silently dropped, though `run_manifest.json` listed them.
   GraphQL scenario headers take `{{pool}}` placeholders, as REST ones do.

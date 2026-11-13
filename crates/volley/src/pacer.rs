@@ -6,8 +6,11 @@ use crate::{Error, Target};
 
 /// Controls the rate at which hits are fired.
 pub trait Pacer: Send + Sync {
-    /// Returns `(wait, stop)`: how long to sleep before the next hit, and
-    /// whether the attack should stop (`true` ends it).
+    /// Returns `(wait, stop)` for hit number `hits` (0-based) at `elapsed`
+    /// into the attack. `stop` ends the attack. Otherwise the hit fires when
+    /// `wait` is zero; a nonzero `wait` is slept and the pacer asked again.
+    /// So the answer must be idempotent: the same `(elapsed, hits)` gets the
+    /// same answer, and `hits` never decreases.
     fn pace(&self, elapsed: Duration, hits: u64) -> (Duration, bool);
 
     /// The instantaneous hit rate (hits per second) at `elapsed`.
@@ -112,12 +115,22 @@ impl Pacer for LinearPacer {
     }
 }
 
-/// Fires hits as a Poisson process with the given mean rate. Seeded for
-/// reproducibility; falls back to firing immediately when behind schedule.
+/// Fires hits as a Poisson process with the given mean rate: the first hit at
+/// once, then exponentially distributed gaps from a seeded RNG, so the
+/// schedule is reproducible. A hit whose time has passed (the attack fell
+/// behind) is due at once, so the attack catches up.
 #[derive(Debug)]
 pub struct PoissonPacer {
     mean_rate: f64,
-    rng: std::sync::Mutex<rand_chacha::ChaCha8Rng>,
+    schedule: std::sync::Mutex<PoissonSchedule>,
+}
+
+/// The draws so far: hit number `hit` is due at `next`.
+#[derive(Debug)]
+struct PoissonSchedule {
+    rng: rand_chacha::ChaCha8Rng,
+    hit: u64,
+    next: Duration,
 }
 
 impl PoissonPacer {
@@ -126,7 +139,11 @@ impl PoissonPacer {
         use rand::SeedableRng;
         Self {
             mean_rate: rate,
-            rng: std::sync::Mutex::new(rand_chacha::ChaCha8Rng::seed_from_u64(seed)),
+            schedule: std::sync::Mutex::new(PoissonSchedule {
+                rng: rand_chacha::ChaCha8Rng::seed_from_u64(seed),
+                hit: 0,
+                next: Duration::ZERO,
+            }),
         }
     }
 }
@@ -134,22 +151,21 @@ impl PoissonPacer {
 impl Pacer for PoissonPacer {
     fn pace(&self, elapsed: Duration, hits: u64) -> (Duration, bool) {
         use rand::RngExt;
-        if self.mean_rate <= 0.0 {
+        if !(self.mean_rate > 0.0 && self.mean_rate.is_finite()) {
             return (Duration::ZERO, true);
         }
-        // Behind schedule: fire immediately.
-        if (hits as f64) < self.mean_rate * elapsed.as_secs_f64() {
-            return (Duration::ZERO, false);
+        let mut s = self.schedule.lock().unwrap_or_else(|e| e.into_inner());
+        while s.hit < hits {
+            // Map [0,1) to (0,1], so the log is finite.
+            let u = 1.0 - s.rng.random::<f64>();
+            let gap = Duration::try_from_secs_f64(-u.ln() / self.mean_rate);
+            match gap.ok().and_then(|g| s.next.checked_add(g)) {
+                Some(next) => s.next = next,
+                None => return (Duration::ZERO, true),
+            }
+            s.hit += 1;
         }
-        let mut u: f64 = {
-            let mut rng = self.rng.lock().unwrap_or_else(|e| e.into_inner());
-            // Map [0,1) to (0,1].
-            1.0 - rng.random::<f64>()
-        };
-        if u <= 0.0 {
-            u = f64::MIN_POSITIVE;
-        }
-        (Duration::from_secs_f64(-u.ln() / self.mean_rate), false)
+        (s.next.saturating_sub(elapsed), false)
     }
 
     fn rate(&self, _elapsed: Duration) -> f64 {
@@ -177,23 +193,39 @@ mod tests {
         assert!((p.rate(Duration::ZERO) - 100.0).abs() < 1e-9);
     }
 
+    /// When each hit a pacer fires in `dur` goes off, driving it like the
+    /// attack loop does: a nonzero wait is slept and the pacer asked again, a
+    /// zero wait fires a hit, and a wait reaching the deadline ends the run.
+    fn fire_times(p: &impl Pacer, dur: Duration) -> Vec<Duration> {
+        let mut elapsed = Duration::ZERO;
+        let mut fired = Vec::new();
+        loop {
+            let (wait, stop) = p.pace(elapsed, fired.len() as u64);
+            if stop || elapsed >= dur {
+                break;
+            }
+            if wait.is_zero() {
+                fired.push(elapsed);
+                continue;
+            }
+            if wait >= dur - elapsed {
+                break;
+            }
+            elapsed += wait;
+        }
+        fired
+    }
+
     /// Hits a pacer fires in `secs`, driving it like the attack loop does.
     fn hits_in(p: &impl Pacer, secs: u64) -> u64 {
-        let mut elapsed = Duration::ZERO;
-        let mut hits = 0u64;
-        while elapsed < Duration::from_secs(secs) {
-            let (wait, stop) = p.pace(elapsed, hits);
-            assert!(!stop);
-            elapsed += wait;
-            hits += 1;
-        }
-        hits
+        fire_times(p, Duration::from_secs(secs)).len() as u64
     }
 
     #[test]
     fn from_rate_fractional_paces_exactly() {
-        assert_eq!(hits_in(&ConstantPacer::from_rate(2.5), 10), 25);
-        assert_eq!(hits_in(&ConstantPacer::from_rate(0.5), 10), 5);
+        // The first hit is at 1/rate; the one due exactly at the end never fires.
+        assert_eq!(hits_in(&ConstantPacer::from_rate(2.5), 10), 24);
+        assert_eq!(hits_in(&ConstantPacer::from_rate(0.5), 10), 4);
         assert!((ConstantPacer::from_rate(2.7).rate(Duration::ZERO) - 2.7).abs() < 1e-9);
     }
 
@@ -256,17 +288,35 @@ mod tests {
 
     #[test]
     fn poisson_mean_converges() {
-        let p = PoissonPacer::new(200.0, POISSON_SEED);
-        let mut elapsed = Duration::ZERO;
-        let mut hits = 0u64;
-        while elapsed < Duration::from_secs(10) {
-            let (wait, stop) = p.pace(elapsed, hits);
-            assert!(!stop);
-            elapsed += wait;
-            hits += 1;
-        }
+        let hits = hits_in(&PoissonPacer::new(200.0, POISSON_SEED), 10);
         let diff = (hits as f64 - 2000.0).abs();
         assert!(diff <= 100.0, "hits = {hits}, want 2000 +/- 5%");
+    }
+
+    #[test]
+    fn poisson_counts_are_poisson_dispersed() {
+        // 100 rps for 200 s. Per-second counts of a Poisson process have a
+        // variance equal to their mean (index of dispersion ~1); a pacer that
+        // hugs the mean line gives ~0.
+        let p = PoissonPacer::new(100.0, POISSON_SEED);
+        let mut counts = [0u32; 200];
+        for t in fire_times(&p, Duration::from_secs(200)) {
+            counts[t.as_secs() as usize] += 1;
+        }
+        let n = counts.len() as f64;
+        let mean = counts.iter().map(|&c| f64::from(c)).sum::<f64>() / n;
+        let var = counts.iter().map(|&c| (f64::from(c) - mean).powi(2)).sum::<f64>() / (n - 1.0);
+        assert!((mean - 100.0).abs() < 3.0, "mean {mean}");
+        let dispersion = var / mean;
+        assert!((0.7..1.3).contains(&dispersion), "index of dispersion {dispersion}");
+    }
+
+    #[test]
+    fn poisson_non_finite_rate_stops() {
+        for rate in [f64::NAN, f64::INFINITY, -1.0] {
+            let (_, stop) = PoissonPacer::new(rate, POISSON_SEED).pace(Duration::ZERO, 0);
+            assert!(stop, "rate {rate}");
+        }
     }
 
     #[test]
@@ -298,6 +348,8 @@ mod tests {
         for hits in 0..100u64 {
             let wa = a.pace(elapsed, hits);
             assert_eq!(wa, b.pace(elapsed, hits));
+            // Asking again before the hit fires gives the same answer.
+            assert_eq!(wa, a.pace(elapsed, hits));
             elapsed += wa.0;
         }
     }
