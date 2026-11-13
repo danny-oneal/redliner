@@ -1,4 +1,5 @@
 use super::*;
+use clap::Parser;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -613,4 +614,204 @@ fn insecure_tls_is_off_unless_set() {
     assert!(!c.target.insecure_tls);
     let c = load_str(&format!("{GQL_HEAD}  insecure_tls: true\n{ONE_GQL}")).unwrap();
     assert!(c.target.insecure_tls);
+}
+
+#[test]
+fn target_url_credentials_rejected() {
+    // They would land in run_manifest.json, results.jsonl and the banner.
+    for url in ["http://alice:pw@127.0.0.1:18080", "http://alice@h/graphql", "ftp://alice:pw@h"] {
+        let t = err_text(load_str(&format!("target:\n  url: {url}\n{ONE_GQL}")));
+        assert!(
+            t.contains(&format!("target.url: {URL_CREDENTIALS}")),
+            "{url}: {t}"
+        );
+        assert!(!t.contains("alice"), "the URL is not echoed: {t}");
+    }
+    // A URL that fails to parse is not echoed either when it may hold credentials.
+    let t = err_text(load_str(&format!("target:\n  url: http://alice:pw@h:99999\n{ONE_GQL}")));
+    assert!(t.contains("target.url: invalid port number"), "{t}");
+    assert!(!t.contains("alice") && !t.contains("pw@"), "the URL is not echoed: {t}");
+}
+
+#[test]
+fn target_url_must_be_http_or_https() {
+    let t = err_text(load_str(&format!("target:\n  url: localhost:8080\n{ONE_GQL}")));
+    assert!(t.contains("target.url \"localhost:8080\": only http and https are supported"), "{t}");
+    let t = err_text(load_str(&format!("target:\n  url: /graphql\n{ONE_GQL}")));
+    assert!(t.contains("target.url \"/graphql\": relative URL without a base"), "{t}");
+    load_str(&format!("target:\n  url: HTTPS://h/graphql?x=1\n{ONE_GQL}")).unwrap();
+}
+
+const REST_HEAD: &str = "target:\n  url: http://x\n  protocol: rest\n";
+
+#[test]
+fn rest_paths_must_start_with_a_slash() {
+    // Appended to target.url as is: "products/1" would request http://xproducts/1.
+    let y = format!(
+        "{REST_HEAD}data:\n  harvest:\n    - {{request: {{path: items}}, extract: {{ids: '[].id'}}}}\n\
+         scenarios:\n  - {{name: a, weight: 1, request: {{path: products/1}}}}\n"
+    );
+    let t = err_text(load_str(&y));
+    assert!(t.contains("scenario \"a\": request.path must start with /"), "{t}");
+    assert!(t.contains("data.harvest[0]: request.path must start with /"), "{t}");
+}
+
+#[test]
+fn rest_methods_must_be_valid() {
+    let y = format!(
+        "{REST_HEAD}data:\n  harvest:\n    - {{request: {{method: 'GE T', path: /i}}, extract: {{ids: '[].id'}}}}\n\
+         scenarios:\n  - {{name: a, weight: 1, request: {{method: 'G E T', path: /a}}}}\n  - {{name: b, weight: 1, request: {{method: purge, path: /b}}}}\n"
+    );
+    let t = err_text(load_str(&y));
+    assert!(t.contains("scenario \"a\": request.method \"G E T\" is not a valid HTTP method"), "{t}");
+    assert!(t.contains("data.harvest[0]: request.method \"GE T\" is not a valid HTTP method"), "{t}");
+    assert!(!t.contains("scenario \"b\""), "an extension method is fine: {t}");
+}
+
+#[test]
+fn header_names_and_values_validated() {
+    let y = "target:\n  url: http://x\n  protocol: rest\n  headers: {'Bad Header': v, X-Ok: \"a\\nb\"}\n  \
+             auth: {type: header, token_env: T, header: 'X Key'}\n\
+             data:\n  harvest:\n    - {request: {path: /i, headers: {'h(': v}}, extract: {ids: '[].id'}}\n\
+             scenarios:\n  - {name: a, weight: 1, request: {path: /a, headers: {'X:Y': v, X-Tpl: \"{{ids}}\\r\"}}}\n";
+    let t = err_text(load_str(y));
+    for want in [
+        "target.headers \"Bad Header\": invalid HTTP header name",
+        "target.headers \"X-Ok\": failed to parse header value",
+        "target.auth.header \"X Key\": invalid HTTP header name",
+        "data.harvest[0]: request.headers \"h(\": invalid HTTP header name",
+        "scenario \"a\": request.headers \"X:Y\": invalid HTTP header name",
+        "scenario \"a\": request.headers \"X-Tpl\": failed to parse header value",
+    ] {
+        assert!(t.contains(want), "{want}: {t}");
+    }
+}
+
+#[test]
+fn placeholders_must_name_a_pool() {
+    let y = format!(
+        "{GQL_HEAD}data:\n  pools:\n    ids: {{type: range, min: 1, max: 9}}\n  harvest:\n    \
+         - {{request: {{query: q}}, extract: {{skus: 'data.items[].sku'}}}}\n\
+         scenarios:\n  - {{name: a, weight: 1, request: {{query: q, variables: {{id: '{{{{ids}}}}', in: {{s: ['x-{{{{ skus }}}}', '{{{{nope}}}}']}}, b: 'a {{{{ids'}}}}}}\n"
+    );
+    let t = err_text(load_str(&y));
+    assert!(t.contains("scenario \"a\": request.variables: unknown pool \"nope\""), "{t}");
+    assert!(t.contains("scenario \"a\": request.variables: unterminated {{"), "{t}");
+    assert!(!t.contains("\"ids\"") && !t.contains("\"skus\""), "pools and harvest keys resolve: {t}");
+
+    let y = format!(
+        "{REST_HEAD}scenarios:\n  - {{name: a, weight: 1, request: {{path: '/p/{{{{p}}}}', body: '{{{{b}}}}', headers: {{X-H: '{{{{h}}}}'}}}}}}\n"
+    );
+    let t = err_text(load_str(&y));
+    for want in [
+        "scenario \"a\": request.path: unknown pool \"p\"",
+        "scenario \"a\": request.body: unknown pool \"b\"",
+        "scenario \"a\": request.headers \"X-H\": unknown pool \"h\"",
+    ] {
+        assert!(t.contains(want), "{want}: {t}");
+    }
+}
+
+#[test]
+fn file_pool_as_validated() {
+    // Anything but `int` used to mean string, so `as: Int` fed strings to Int! variables.
+    let y = format!(
+        "{GQL_HEAD}data:\n  pools:\n    f: {{type: file, path: f.txt, as: Int}}\n    \
+         g: {{type: file, path: g.txt, as: string}}\n    h: {{type: file, path: h.txt, as: int}}\n{ONE_GQL}"
+    );
+    let t = err_text(load_str(&y));
+    assert!(t.contains("pool \"f\": file as \"Int\" not supported (string|int)"), "{t}");
+    assert!(!t.contains("pool \"g\"") && !t.contains("pool \"h\""), "{t}");
+}
+
+#[test]
+fn pool_fields_of_another_type_rejected() {
+    let y = format!(
+        "{GQL_HEAD}data:\n  pools:\n    l: {{type: list, values: [1], as: int}}\n    \
+         s: {{type: sequence, min: 5, values: [1]}}\n    u: {{type: uuid, start: 1}}\n    \
+         r: {{type: range, min: 1, max: 2, path: x}}\n    ok: {{type: range, min: -5, max: 0}}\n{ONE_GQL}"
+    );
+    let t = err_text(load_str(&y));
+    for want in [
+        "pool \"l\": as is not used by type \"list\"",
+        "pool \"s\": values, min are not used by type \"sequence\"",
+        "pool \"u\": start is not used by type \"uuid\"",
+        "pool \"r\": path is not used by type \"range\"",
+    ] {
+        assert!(t.contains(want), "{want}: {t}");
+    }
+    assert!(!t.contains("pool \"ok\""), "{t}");
+}
+
+#[test]
+fn range_pool_needs_bounds() {
+    // Without min and max it validated and always yielded 0.
+    let y = format!("{GQL_HEAD}data:\n  pools:\n    r: {{type: range}}\n{ONE_GQL}");
+    let t = err_text(load_str(&y));
+    assert!(t.contains("pool \"r\": range pool needs min and max"), "{t}");
+}
+
+#[test]
+fn negative_max_idle_conns_rejected() {
+    // -1 became 0 (no pooling) while 0 means the 10000 default.
+    let t = err_text(load_str(&format!("{GQL_HEAD}  max_idle_conns: -1\n{ONE_GQL}")));
+    assert!(t.contains("target.max_idle_conns must be >= 0, got -1"), "{t}");
+}
+
+#[test]
+fn weight_defaults_to_one() {
+    let c = load_str(&format!("{GQL_HEAD}scenarios:\n  - {{name: a, request: {{query: q}}}}\n")).unwrap();
+    assert_eq!(c.scenarios[0].weight, 1.0);
+}
+
+#[test]
+fn weights_must_be_positive_and_finite() {
+    for w in ["0", "-1", ".nan", ".inf"] {
+        let y = format!("{GQL_HEAD}scenarios:\n  - {{name: a, weight: {w}, request: {{query: q}}}}\n");
+        let t = err_text(load_str(&y));
+        assert!(t.contains("scenario \"a\": weight must be > 0 and finite"), "{w}: {t}");
+    }
+    // Finite weights whose sum is not: the mix would never pick the last one.
+    let y = format!(
+        "{GQL_HEAD}scenarios:\n  - {{name: a, weight: 1e308, request: {{query: q}}}}\n  \
+         - {{name: b, weight: 1e308, request: {{query: q}}}}\n"
+    );
+    let t = err_text(load_str(&y));
+    assert!(t.contains("scenarios: the total weight overflows; use smaller weights"), "{t}");
+}
+
+#[test]
+fn check_statuses_must_be_http_codes() {
+    // They were truncated `as u16`: 65736 meant 200 and -1 meant 65535.
+    let y = format!("{GQL_HEAD}checks: {{status: [200, 65736, -1, 99, 600, 599, 100]}}\n{ONE_GQL}");
+    let t = err_text(load_str(&y));
+    assert!(
+        t.contains("checks.status must hold HTTP status codes (100-599), got 65736, -1, 99, 600"),
+        "{t}"
+    );
+}
+
+#[test]
+fn rate_and_duration_unused_by_the_profile_rejected() {
+    // --rate/--duration with a steps or ramp profile used to be ignored.
+    let steps = "profile: steps, steps: [{rate: 5, duration: 1s}]";
+    let t = err_text(with_load(&format!("{steps}, rate: 50, duration: 1m")));
+    assert!(t.contains("load.rate (--rate) is not used by profile steps; each step sets its rate"), "{t}");
+    assert!(
+        t.contains("load.duration (--duration) is not used by profile steps; each step sets its duration"),
+        "{t}"
+    );
+    let dir = tempdir(&format!("{GQL_HEAD}load: {{profile: ramp, ramp: {{from: 1, to: 5}}}}\n{ONE_GQL}"));
+    let t = load_config_file_with(&dir.join("c.yaml"), |c| {
+        crate::cli::Args::parse_from(["redliner", "--rate", "9", "--duration", "5s"]).apply_overrides(c)
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(t.contains("load.rate (--rate) is not used by profile ramp; set load.ramp.from/to"), "{t}");
+    assert!(!t.contains("load.duration"), "ramp runs for load.duration: {t}");
+    // Empty steps or ramp still get only their own error, not a defaulted rate's.
+    let t = err_text(with_load("profile: steps"));
+    assert!(!t.contains("load.rate") && !t.contains("load.duration ("), "{t}");
+    let t = err_text(with_load("profile: ramp"));
+    assert!(!t.contains("load.rate"), "{t}");
 }

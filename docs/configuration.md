@@ -29,13 +29,13 @@ report:  { ... }  # optional
 
 | key          | type    | default    | notes |
 | ------------ | ------- | ---------- | ----- |
-| `url`        | string  | *required* | full endpoint for GraphQL; base URL for REST (scenario paths are appended) |
+| `url`        | string  | *required* | full endpoint for GraphQL; base URL for REST (scenario paths are appended); `http://` or `https://`, without `user:password@` (use `auth` or `headers`) |
 | `protocol`   | enum    | `graphql`  | `graphql` \| `rest` |
 | `timeout`    | duration| `10s`      | per-request timeout |
 | `headers`    | map     | `{}`       | sent on every request; credential values are redacted in `run_manifest.json` (see below) |
 | `auth`       | object  | `none`     | see below; credentials are read from the environment, never the file |
 | `keep_alive` | bool    | `true`     | reuse pooled connections between requests |
-| `max_idle_conns` | int | `10000`    | max idle pooled connections per host |
+| `max_idle_conns` | int | `10000`    | max idle pooled connections per host; `0` means the default, negative is an error |
 | `http2`      | bool    | `false`    | negotiate HTTP/2 with prior knowledge (cleartext h2c or a known h2 server) |
 | `insecure_tls` | bool  | `false`    | skip TLS certificate verification (`--insecure` / `-k`), for staging or in-cluster services with self-signed certs; covers the harvest probe too, and the run prints a warning when it's on |
 
@@ -59,7 +59,8 @@ in `target.auth` (read from the environment).
 | `password_env`  | string | env var holding the password (`basic`) |
 
 A required env var that is unset fails the run before any traffic, naming the
-variable.
+variable. `--validate` only warns about it, so a config can be checked where
+the secret isn't available.
 
 ```yaml
 auth:
@@ -72,8 +73,8 @@ auth:
 | key        | type     | default   | notes |
 | ---------- | -------- | --------- | ----- |
 | `profile`  | enum     | `poisson` | `constant` \| `poisson` \| `ramp` \| `steps` |
-| `rate`     | float    | `200`     | requests per second (`constant`, `poisson`); fractional rates such as `0.5` or `2.7` are honoured |
-| `duration` | duration | `30s`     | measured attack length (`constant`, `poisson`, `ramp`) |
+| `rate`     | float    | `200`     | requests per second (`constant`, `poisson`; an error with `ramp` or `steps`, as is `--rate`); fractional rates such as `0.5` or `2.7` are honoured |
+| `duration` | duration | `30s`     | measured attack length (`constant`, `poisson`, `ramp`; an error with `steps`, as is `--duration`) |
 | `warmup`   | duration | `0`       | unmeasured warmup at 10% of the first phase's rate |
 | `ramp`     | object   | —         | `{ from, to }` rates for `profile: ramp` |
 | `steps`    | list     | —         | `[{ rate, duration }, ...]` for `profile: steps` |
@@ -271,8 +272,8 @@ Each pool is keyed by name. `type` selects the source:
 | `type`  | fields            | yields |
 | ------- | ----------------- | ------ |
 | `list`  | `values: [...]`   | a random element per draw; numbers keep their native type |
-| `range` | `min`, `max`      | a random integer in `min..=max` |
-| `file`  | `path`, `as`      | one line per entry; `as: int` (default `string`) parses to integers; blank lines and `#` comments are skipped |
+| `range` | `min`, `max`      | a random integer in `min..=max`; set at least one of them (not both `0`) |
+| `file`  | `path`, `as`      | one line per entry; `as: string` (default) or `as: int`, which parses each line to an integer; blank lines and `#` comments are skipped |
 | `uuid`  | —                 | a new random (v4) UUID string per draw, from `load.seed` |
 | `sequence` | `start`        | the next integer per draw: `start`, `start+1`, ... (default `start: 1`) |
 | `timestamp` | `as`          | the time of the draw: `rfc3339` (default, e.g. `2026-01-02T03:04:05.678Z`), `unix` (seconds) or `unix_ms`; `unix`/`unix_ms` are integers |
@@ -288,7 +289,9 @@ data:
     sent_at:      { type: timestamp, as: unix_ms }
 ```
 
-File paths resolve relative to the config file.
+File paths resolve relative to the config file. A field the pool's type
+doesn't use (`as` on a `list`, `min` on a `sequence`) is an error rather than
+silently ignored.
 
 Every placeholder is its own draw, so `{{order_no}}` twice in one body gives
 two different numbers. The generator pools are unique *within* a run: the
@@ -309,8 +312,10 @@ exist.
 
 A list of probe requests run once, before the attack. Each extracts values by
 JSON path and appends them into the named pools (creating a pool, or adding to
-an existing one). A path segment ending in `[]` fans out across an array. If a
-path matches nothing, the run fails with the pool and path named.
+an existing one). A path segment ending in `[]` fans out across an array, and a
+bare `[]` fans out across the response itself when it is a top-level array
+(`"[].sku"`). If a path matches nothing, or doesn't fit the response, the run
+fails with the pool and path named.
 
 In a flow mapping (`{ ... }`) a path containing `[]` must be quoted, as in
 `extract: { skus: "items[].sku" }`, or YAML fails to parse it; block style,
@@ -337,7 +342,7 @@ instead.
 | key       | type   | notes |
 | --------- | ------ | ----- |
 | `name`    | string | used for per-operation report attribution |
-| `weight`  | float  | relative selection weight; must be > 0 in profile mode, ignored in replay mode |
+| `weight`  | float  | relative selection weight, default `1`; must be > 0 and finite in profile mode, ignored in replay mode |
 | `match`   | object | replay mode only: which log entries this scenario serves (see [`match`](#match)); ignored in profile mode |
 | `request` | object | the per-protocol request (below) |
 
@@ -354,7 +359,7 @@ instead.
 | key       | type   | default | notes |
 | --------- | ------ | ------- | ----- |
 | `method`  | string | `GET`   | upper-cased |
-| `path`    | string | —       | appended to `target.url`; may contain `{{pool}}` placeholders |
+| `path`    | string | —       | appended to `target.url` as written, so it must start with `/`; may contain `{{pool}}` placeholders |
 | `body`    | string | —       | request body; `{{pool}}` placeholders are rendered; sets `Content-Type: application/json` when present and none is given |
 | `headers` | map    | `{}`    | per-scenario, override the base headers for that route only; values may contain `{{pool}}` placeholders (e.g. `Idempotency-Key: "{{order_refs}}"`), rendered per request after the path and body |
 
@@ -413,7 +418,7 @@ genuine transport error is never masked.
 
 | key              | type       | default | notes |
 | ---------------- | ---------- | ------- | ----- |
-| `status`         | list[int]  | `[]`    | allowed HTTP statuses; empty means the default 2xx/3xx |
+| `status`         | list[int]  | `[]`    | allowed HTTP statuses (100–599); empty means the default 2xx/3xx |
 | `graphql_errors` | bool       | `true` for GraphQL, `false` for REST | a 2xx/3xx response carrying a non-empty top-level `errors` array counts as a failure |
 
 ## `slos`
