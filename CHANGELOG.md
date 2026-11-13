@@ -33,6 +33,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the parser's message, and a missing pool file reads `pool "ids": read
   ids.txt: No such file or directory` instead of naming no path and repeating
   the OS error three times.
+- A run whose stdout is closed before the summary is printed
+  (`redliner ... | head -1`) no longer panics with exit code 101; it exits
+  with its verdict (0, 1 or 130).
 
 ## [0.5.1] - 2026-10-31
 

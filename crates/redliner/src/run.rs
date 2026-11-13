@@ -1,6 +1,7 @@
 //! Run orchestration (Go `run()` in `main.go`).
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -311,7 +312,9 @@ where
             .map_err(|e| anyhow::anyhow!("write junit: {e}"))?;
     }
 
-    print_summary(
+    // A reader that went away (`| head`) must not cost the run its verdict.
+    if let Err(e) = print_summary(
+        &mut std::io::stdout().lock(),
         interrupted,
         collector.overall(),
         collector.per_op(),
@@ -319,7 +322,11 @@ where
         &results,
         elapsed,
         &report_dir,
-    );
+    ) {
+        if e.kind() != std::io::ErrorKind::BrokenPipe {
+            eprintln!("redliner: print summary: {e}");
+        }
+    }
 
     if interrupted {
         return Ok(Exit::Interrupted);
@@ -415,6 +422,7 @@ async fn attack_replay(
 }
 
 fn print_summary(
+    out: &mut impl Write,
     interrupted: bool,
     m: &Metrics,
     per_op: &BTreeMap<String, Metrics>,
@@ -422,65 +430,67 @@ fn print_summary(
     slos: &[SloResult],
     elapsed: Duration,
     report_dir: &Path,
-) {
-    println!();
-    println!("==== redliner summary ====");
+) -> std::io::Result<()> {
+    writeln!(out)?;
+    writeln!(out, "==== redliner summary ====")?;
     if interrupted {
-        println!("status        : INTERRUPTED (partial results)");
+        writeln!(out, "status        : INTERRUPTED (partial results)")?;
     }
-    println!("elapsed       : {}", fmt_dur(elapsed));
-    println!("requests      : {}", m.requests);
-    println!("rate (actual) : {:.1} rps", m.rate);
-    println!("throughput    : {:.1} rps (successful)", m.throughput);
-    println!("success       : {:.3}%", m.success * 100.0);
-    println!("status        : {}", report::status_classes(&m.status_codes));
-    println!("latency p50   : {}", fmt_dur(m.latencies.p50));
-    println!("latency p95   : {}", fmt_dur(m.latencies.p95));
-    println!("latency p99   : {}", fmt_dur(m.latencies.p99));
-    println!("latency p99.9 : {}", fmt_dur(m.latencies.p999));
-    println!("latency max   : {}", fmt_dur(m.latencies.max));
+    writeln!(out, "elapsed       : {}", fmt_dur(elapsed))?;
+    writeln!(out, "requests      : {}", m.requests)?;
+    writeln!(out, "rate (actual) : {:.1} rps", m.rate)?;
+    writeln!(out, "throughput    : {:.1} rps (successful)", m.throughput)?;
+    writeln!(out, "success       : {:.3}%", m.success * 100.0)?;
+    writeln!(out, "status        : {}", report::status_classes(&m.status_codes))?;
+    writeln!(out, "latency p50   : {}", fmt_dur(m.latencies.p50))?;
+    writeln!(out, "latency p95   : {}", fmt_dur(m.latencies.p95))?;
+    writeln!(out, "latency p99   : {}", fmt_dur(m.latencies.p99))?;
+    writeln!(out, "latency p99.9 : {}", fmt_dur(m.latencies.p999))?;
+    writeln!(out, "latency max   : {}", fmt_dur(m.latencies.max))?;
 
     if !per_op.is_empty() {
-        println!("\nper operation:");
+        writeln!(out, "\nper operation:")?;
         for s in report::summarize(per_op) {
-            println!(
+            writeln!(
+                out,
                 "  {:<24} n={:<8} ok={:6.2}%  p50={:<10} p95={:<10} p99={}",
                 s.name, s.requests, s.success * 100.0, s.p50, s.p95, s.p99
-            );
+            )?;
         }
     }
 
     if let Some(r) = replay {
-        print!("\n{}", r.render());
+        write!(out, "\n{}", r.render())?;
     }
 
     if !m.errors.is_empty() {
-        println!("\nerrors        : {} distinct", m.errors.len());
+        writeln!(out, "\nerrors        : {} distinct", m.errors.len())?;
         for (i, e) in m.errors.iter().enumerate() {
             if i >= 5 {
-                println!("  ... +{} more", m.errors.len() - 5);
+                writeln!(out, "  ... +{} more", m.errors.len() - 5)?;
                 break;
             }
-            println!("  - {e}");
+            writeln!(out, "  - {e}")?;
         }
     }
 
     if !slos.is_empty() {
-        println!("\nSLOs:");
+        writeln!(out, "\nSLOs:")?;
         for r in slos {
             let mark = if r.passed { "PASS" } else { "FAIL" };
-            println!(
+            writeln!(
+                out,
                 "  [{mark}] {:<14} target {:<12} observed {}",
                 r.name, r.target, r.observed
-            );
+            )?;
         }
     }
 
     if slos.iter().any(|r| !r.passed) {
-        println!("{}", redline_banner());
+        writeln!(out, "{}", redline_banner())?;
     }
 
-    println!("\nreports in    : {}", report_dir.display());
+    writeln!(out, "\nreports in    : {}", report_dir.display())
 }
 
 /// A redline tachometer bar, printed when a run violates its SLOs.
