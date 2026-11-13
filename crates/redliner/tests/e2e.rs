@@ -322,6 +322,32 @@ async fn validate_flag_exits_zero_without_firing() {
 }
 
 #[tokio::test]
+async fn validate_builds_file_pools() {
+    // A run reads file pools before any traffic; --validate must too.
+    let dir = tempdir("val-pool");
+    let pools = "data:\n  pools:\n    ids: {type: file, path: ids.txt}\n";
+    let cfg = write_cfg(&dir, "http://127.0.0.1:9/graphql", pools);
+    assert_eq!(run(args(&cfg, &["--validate"])).await, Exit::Error);
+    std::fs::write(dir.join("ids.txt"), "1\n").unwrap();
+    assert_eq!(run(args(&cfg, &["--validate"])).await, Exit::Ok);
+}
+
+#[tokio::test]
+async fn validate_passes_without_the_auth_env_var() {
+    // The secret belongs to the environment that runs the load, not to the
+    // config: --validate warns about it and still passes.
+    let dir = tempdir("val-env");
+    let cfg = dir.join("cfg.yaml");
+    std::fs::write(
+        &cfg,
+        "target:\n  url: http://127.0.0.1:9/graphql\n  auth: {type: bearer, token_env: RL_E2E_VALIDATE_UNSET}\n\
+         scenarios:\n  - {name: a, weight: 1, request: {query: q}}\n",
+    )
+    .unwrap();
+    assert_eq!(run(args(&cfg, &["--validate"])).await, Exit::Ok);
+}
+
+#[tokio::test]
 async fn missing_config_exits_error() {
     let a = Args::parse_from(["redliner", "--config", "/nonexistent/x.yaml"]);
     assert_eq!(run(a).await, Exit::Error);

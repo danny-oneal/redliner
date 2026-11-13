@@ -13,6 +13,24 @@ use serde::{Deserialize, Serialize};
 
 pub use duration::ConfigDuration;
 
+/// Why a URL with `user:password@` is refused: it would land in reports.
+pub(crate) const URL_CREDENTIALS: &str =
+    "credentials in the URL are not supported; use --header or a config with target.auth";
+
+/// `raw` as an http(s) URL without credentials. The error follows `label`
+/// and never echoes a URL that may hold credentials.
+pub(crate) fn parse_target_url(label: &str, raw: &str) -> Result<reqwest::Url, String> {
+    let shown = if raw.contains('@') { String::new() } else { format!(" {raw:?}") };
+    let url = reqwest::Url::parse(raw).map_err(|e| format!("{label}{shown}: {e}"))?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(format!("{label}: {URL_CREDENTIALS}"));
+    }
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(format!("{label}{shown}: only http and https are supported"));
+    }
+    Ok(url)
+}
+
 /// Request encoder selector. Defaults to GraphQL when omitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -139,12 +157,18 @@ pub struct HarvestConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct Scenario {
     pub name: String,
+    /// Unset means 1, so a one-scenario config needs no weight.
+    #[serde(default = "default_weight")]
     pub weight: f64,
     pub request: RequestConfig,
     /// Replay-mode rule selecting which logged requests this scenario
     /// serves. Ignored in profile mode.
     #[serde(rename = "match")]
     pub matcher: Option<MatchConfig>,
+}
+
+fn default_weight() -> f64 {
+    1.0
 }
 
 /// Which logged entries a scenario replays. GraphQL scenarios match on
@@ -399,10 +423,13 @@ impl Config {
             if l.profile.is_empty() {
                 l.profile = "poisson".into();
             }
-            if l.rate == 0.0 && l.steps.is_empty() && l.ramp.to == 0.0 {
+            // Not for a profile that ignores them, so validation can tell a
+            // value the user set from a default.
+            let reads_rate = matches!(l.profile.as_str(), "constant" | "poisson");
+            if l.rate == 0.0 && l.steps.is_empty() && l.ramp.to == 0.0 && reads_rate {
                 l.rate = 200.0;
             }
-            if l.duration.as_std().is_zero() && l.steps.is_empty() {
+            if l.duration.as_std().is_zero() && l.steps.is_empty() && l.profile != "steps" {
                 l.duration = ConfigDuration(Duration::from_secs(30));
             }
         }
@@ -468,6 +495,15 @@ impl Config {
 
         if t.url.is_empty() {
             errs.push("target.url is required".into());
+        } else if let Err(e) = parse_target_url("target.url", &t.url) {
+            errs.push(e);
+        }
+        check_headers("target.headers", &t.headers, &mut errs);
+        if t.max_idle_conns < 0 {
+            errs.push(format!(
+                "target.max_idle_conns must be >= 0, got {}",
+                t.max_idle_conns
+            ));
         }
         // Go also checks target.protocol here; in Rust an unknown protocol
         // is rejected at parse time by the `Protocol` enum.
@@ -483,6 +519,10 @@ impl Config {
                 }
                 if a.auth_type == "header" && a.header.is_empty() {
                     errs.push("target.auth.header is required for auth type header".into());
+                } else if a.auth_type == "header" {
+                    if let Err(e) = http::HeaderName::from_bytes(a.header.as_bytes()) {
+                        errs.push(format!("target.auth.header {:?}: {e}", a.header));
+                    }
                 }
             }
             "basic" => {
@@ -527,10 +567,22 @@ impl Config {
                         errs.push("load.ramp.from/to must be set for profile ramp \
                                    (finite, from >= 0, to > 0)".into());
                     }
+                    if l.rate != 0.0 {
+                        errs.push("load.rate (--rate) is not used by profile ramp; \
+                                   set load.ramp.from/to".into());
+                    }
                 }
                 "steps" => {
                     if l.steps.is_empty() {
                         errs.push("load.steps must be non-empty for profile steps".into());
+                    }
+                    if l.rate != 0.0 {
+                        errs.push("load.rate (--rate) is not used by profile steps; \
+                                   each step sets its rate".into());
+                    }
+                    if !l.duration.as_std().is_zero() {
+                        errs.push("load.duration (--duration) is not used by profile steps; \
+                                   each step sets its duration".into());
                     }
                     for (i, s) in l.steps.iter().enumerate() {
                         let dur = s.duration.as_std();
@@ -558,6 +610,14 @@ impl Config {
         if self.replay.is_some() && self.scenarios.iter().all(|s| s.matcher.is_none()) {
             errs.push("at least one scenario needs a match rule for replay".into());
         }
+        // What a `{{placeholder}}` can name: a pool, or a harvest extract key.
+        let pools: std::collections::HashSet<&str> = self
+            .data
+            .pools
+            .keys()
+            .chain(self.data.harvest.iter().flat_map(|h| h.extract.keys()))
+            .map(String::as_str)
+            .collect();
         let mut seen = std::collections::HashSet::new();
         for (i, s) in self.scenarios.iter().enumerate() {
             if s.name.is_empty() {
@@ -567,14 +627,16 @@ impl Config {
             if !seen.insert(s.name.as_str()) {
                 errs.push(format!("scenarios[{i}]: duplicate name {:?}", s.name));
             }
-            if self.replay.is_none() && s.weight <= 0.0 {
-                errs.push(format!("scenario {:?}: weight must be > 0", s.name));
+            if self.replay.is_none() && !positive_finite(s.weight) {
+                errs.push(format!("scenario {:?}: weight must be > 0 and finite", s.name));
             }
             if self.replay.is_some() {
                 if let Some(m) = &s.matcher {
                     validate_match(&s.name, m, t.protocol, &mut errs);
                 }
             }
+            let ctx = format!("scenario {:?}", s.name);
+            check_headers(&format!("{ctx}: request.headers"), &s.request.headers, &mut errs);
             match t.protocol {
                 Protocol::Graphql => {
                     if s.request.query.is_empty() {
@@ -589,6 +651,10 @@ impl Config {
                             s.name
                         ));
                     }
+                    let vars = format!("{ctx}: request.variables");
+                    for v in s.request.variables.values() {
+                        check_value_refs(&vars, v, &pools, &mut errs);
+                    }
                 }
                 Protocol::Rest => {
                     if s.request.path.is_empty() {
@@ -596,6 +662,12 @@ impl Config {
                             "scenario {:?}: request.path is required for rest",
                             s.name
                         ));
+                    }
+                    check_rest_request(&ctx, &s.request, &mut errs);
+                    check_refs(&format!("{ctx}: request.path"), &s.request.path, &pools, &mut errs);
+                    check_refs(&format!("{ctx}: request.body"), &s.request.body, &pools, &mut errs);
+                    for (k, v) in &s.request.headers {
+                        check_refs(&format!("{ctx}: request.headers {k:?}"), v, &pools, &mut errs);
                     }
                     if !s.request.query.is_empty() || !s.request.query_file.is_empty() {
                         errs.push(format!(
@@ -605,6 +677,15 @@ impl Config {
                     }
                 }
             }
+        }
+
+        // Finite weights can still overflow the mix's cumulative total.
+        let total: f64 = self.scenarios.iter().map(|s| s.weight).sum();
+        if self.replay.is_none()
+            && self.scenarios.iter().all(|s| positive_finite(s.weight))
+            && !total.is_finite()
+        {
+            errs.push("scenarios: the total weight overflows; use smaller weights".into());
         }
 
         for (name, p) in &self.data.pools {
@@ -618,9 +699,17 @@ impl Config {
                     if p.path.is_empty() {
                         errs.push(format!("pool {name:?}: file pool needs path"));
                     }
+                    if !matches!(p.as_type.as_str(), "" | "string" | "int") {
+                        errs.push(format!(
+                            "pool {name:?}: file as {:?} not supported (string|int)",
+                            p.as_type
+                        ));
+                    }
                 }
                 "range" => {
-                    if p.max < p.min {
+                    if p.min == 0 && p.max == 0 {
+                        errs.push(format!("pool {name:?}: range pool needs min and max"));
+                    } else if p.max < p.min {
                         errs.push(format!("pool {name:?}: range max < min"));
                     }
                 }
@@ -638,6 +727,36 @@ impl Config {
                      (list|file|range|uuid|sequence|timestamp)"
                 )),
             }
+            // A field another pool type reads is silently ignored otherwise.
+            let used: &[&str] = match p.pool_type.as_str() {
+                "list" => &["values"],
+                "file" => &["path", "as"],
+                "range" => &["min", "max"],
+                "sequence" => &["start"],
+                "timestamp" => &["as"],
+                "uuid" => &[],
+                _ => continue,
+            };
+            let stray: Vec<&str> = [
+                ("values", !p.values.is_empty()),
+                ("path", !p.path.is_empty()),
+                ("min", p.min != 0),
+                ("max", p.max != 0),
+                ("start", p.start.is_some()),
+                ("as", !p.as_type.is_empty()),
+            ]
+            .into_iter()
+            .filter(|(field, set)| *set && !used.contains(field))
+            .map(|(field, _)| field)
+            .collect();
+            if !stray.is_empty() {
+                let verb = if stray.len() == 1 { "is" } else { "are" };
+                errs.push(format!(
+                    "pool {name:?}: {} {verb} not used by type {:?}",
+                    stray.join(", "),
+                    p.pool_type
+                ));
+            }
         }
         for (i, h) in self.data.harvest.iter().enumerate() {
             if h.extract.is_empty() {
@@ -653,6 +772,24 @@ impl Config {
                     "data.harvest[{i}]: request.path is required for rest"
                 ));
             }
+            let ctx = format!("data.harvest[{i}]");
+            if t.protocol == Protocol::Rest {
+                check_rest_request(&ctx, &h.request, &mut errs);
+            }
+            check_headers(&format!("{ctx}: request.headers"), &h.request.headers, &mut errs);
+        }
+        let bad: Vec<String> = self
+            .checks
+            .statuses
+            .iter()
+            .filter(|s| !(100..=599).contains(*s))
+            .map(i64::to_string)
+            .collect();
+        if !bad.is_empty() {
+            errs.push(format!(
+                "checks.status must hold HTTP status codes (100-599), got {}",
+                bad.join(", ")
+            ));
         }
         let s = &self.slos;
         if !(0.0..=1.0).contains(&s.success_rate) {
@@ -675,6 +812,69 @@ impl Config {
             }
         }
         errs
+    }
+}
+
+/// Header names and values as the encoders will parse them; values are not
+/// echoed, since they may be credentials.
+fn check_headers(ctx: &str, headers: &BTreeMap<String, String>, errs: &mut Vec<String>) {
+    for (k, v) in headers {
+        if let Err(e) = http::HeaderName::from_bytes(k.as_bytes()) {
+            errs.push(format!("{ctx} {k:?}: {e}"));
+        } else if let Err(e) = http::HeaderValue::from_str(v) {
+            errs.push(format!("{ctx} {k:?}: {e}"));
+        }
+    }
+}
+
+/// A REST path is appended to `target.url` as is, and the method is sent
+/// upper-cased (an empty one, in a harvest request, means GET).
+fn check_rest_request(ctx: &str, rc: &RequestConfig, errs: &mut Vec<String>) {
+    if !rc.path.is_empty() && !rc.path.starts_with('/') {
+        errs.push(format!("{ctx}: request.path must start with /"));
+    }
+    let method = rc.method.to_ascii_uppercase();
+    if !method.is_empty() && http::Method::from_bytes(method.as_bytes()).is_err() {
+        errs.push(format!(
+            "{ctx}: request.method {:?} is not a valid HTTP method",
+            rc.method
+        ));
+    }
+}
+
+/// Every `{{name}}` in `s` names a known pool, scanned as
+/// `data::render_string` renders it.
+fn check_refs(ctx: &str, s: &str, pools: &std::collections::HashSet<&str>, errs: &mut Vec<String>) {
+    let mut rest = s;
+    while let Some(start) = rest.find("{{") {
+        let Some(end) = rest[start..].find("}}") else {
+            errs.push(format!("{ctx}: unterminated {{{{"));
+            return;
+        };
+        let name = rest[start + 2..start + end].trim();
+        if !pools.contains(name) {
+            errs.push(format!("{ctx}: unknown pool {name:?}"));
+        }
+        rest = &rest[start + end + 2..];
+    }
+}
+
+/// [`check_refs`] for every string inside GraphQL variables.
+fn check_value_refs(
+    ctx: &str,
+    v: &serde_json::Value,
+    pools: &std::collections::HashSet<&str>,
+    errs: &mut Vec<String>,
+) {
+    match v {
+        serde_json::Value::String(s) => check_refs(ctx, s, pools, errs),
+        serde_json::Value::Array(a) => {
+            a.iter().for_each(|v| check_value_refs(ctx, v, pools, errs))
+        }
+        serde_json::Value::Object(m) => {
+            m.values().for_each(|v| check_value_refs(ctx, v, pools, errs))
+        }
+        _ => {}
     }
 }
 
