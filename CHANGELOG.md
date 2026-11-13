@@ -22,6 +22,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Docs: the README's minimal config and two `docs/configuration.md` examples
   (the `data.pools` block and the REST harvest form) now parse. A harvest
   path containing `[]` must be quoted inside `{ ... }`.
+- `scripts/install.sh` accepts `REDLINER_VERSION` without the leading `v`
+  (`0.5.0` as well as `v0.5.0`) instead of failing with a 404.
 
 ## [0.5.1] - 2026-10-31
 

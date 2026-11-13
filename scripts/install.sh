@@ -54,6 +54,7 @@ if [ -z "$version" ]; then
     version=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp/releases.json" | head -n 1)
     [ -n "$version" ] || die "no releases found for $repo"
 fi
+version=v${version#v}
 
 base=${REDLINER_DOWNLOAD_URL:-https://github.com/$repo/releases/download/$version}
 asset="redliner-$version-$target.tar.gz"
