@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::config::{Config, ConfigDuration, RequestConfig, Scenario, URL_CREDENTIALS};
+use crate::config::{parse_target_url, Config, ConfigDuration, RequestConfig, Scenario};
 
 /// Read when `--config` is not given, if it exists.
 pub const DEFAULT_CONFIG: &str = "redliner.yaml";
@@ -217,14 +217,7 @@ impl Args {
     /// and one scenario for its path and query.
     pub fn url_request(&self) -> Result<(String, Scenario), String> {
         let raw = self.url.as_deref().unwrap_or_default();
-        let url = reqwest::Url::parse(raw).map_err(|e| format!("--url {raw:?}: {e}"))?;
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(format!("--url {raw:?}: only http and https are supported"));
-        }
-        // The URL would land in reports; don't echo it either.
-        if !url.username().is_empty() || url.password().is_some() {
-            return Err(format!("--url: {URL_CREDENTIALS}"));
-        }
+        let url = parse_target_url("--url", raw)?;
         let method = self.method.as_deref().unwrap_or("GET").to_ascii_uppercase();
         let mut path = url.path().to_string();
         let name = format!("{method} {path}");
@@ -448,6 +441,13 @@ mod tests {
                 "http://user:pw@h/x",
                 "--url: credentials in the URL are not supported; use --header or a config with target.auth",
             ),
+            // Credentials are refused before the scheme, whose error echoes the URL.
+            (
+                "ftp://user:pw@h/x",
+                "--url: credentials in the URL are not supported; use --header or a config with target.auth",
+            ),
+            // A URL that fails to parse is not echoed when it may hold credentials.
+            ("http://user:pw@h:99999/x", "--url: invalid port number"),
         ] {
             let e = Args::parse_from(["redliner", "--url", url]).url_request().unwrap_err();
             assert_eq!(e, want);

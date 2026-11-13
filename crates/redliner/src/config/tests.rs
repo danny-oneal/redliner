@@ -627,6 +627,10 @@ fn target_url_credentials_rejected() {
         );
         assert!(!t.contains("alice"), "the URL is not echoed: {t}");
     }
+    // A URL that fails to parse is not echoed either when it may hold credentials.
+    let t = err_text(load_str(&format!("target:\n  url: http://alice:pw@h:99999\n{ONE_GQL}")));
+    assert!(t.contains("target.url: invalid port number"), "{t}");
+    assert!(!t.contains("alice") && !t.contains("pw@"), "the URL is not echoed: {t}");
 }
 
 #[test]

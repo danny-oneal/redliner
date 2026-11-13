@@ -17,6 +17,20 @@ pub use duration::ConfigDuration;
 pub(crate) const URL_CREDENTIALS: &str =
     "credentials in the URL are not supported; use --header or a config with target.auth";
 
+/// `raw` as an http(s) URL without credentials. The error follows `label`
+/// and never echoes a URL that may hold credentials.
+pub(crate) fn parse_target_url(label: &str, raw: &str) -> Result<reqwest::Url, String> {
+    let shown = if raw.contains('@') { String::new() } else { format!(" {raw:?}") };
+    let url = reqwest::Url::parse(raw).map_err(|e| format!("{label}{shown}: {e}"))?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(format!("{label}: {URL_CREDENTIALS}"));
+    }
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(format!("{label}{shown}: only http and https are supported"));
+    }
+    Ok(url)
+}
+
 /// Request encoder selector. Defaults to GraphQL when omitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -481,19 +495,8 @@ impl Config {
 
         if t.url.is_empty() {
             errs.push("target.url is required".into());
-        } else {
-            match reqwest::Url::parse(&t.url) {
-                Err(e) => errs.push(format!("target.url {:?}: {e}", t.url)),
-                // Don't echo the URL: it holds the credentials.
-                Ok(u) if !u.username().is_empty() || u.password().is_some() => {
-                    errs.push(format!("target.url: {URL_CREDENTIALS}"))
-                }
-                Ok(u) if !matches!(u.scheme(), "http" | "https") => errs.push(format!(
-                    "target.url {:?}: only http and https are supported",
-                    t.url
-                )),
-                Ok(_) => {}
-            }
+        } else if let Err(e) = parse_target_url("target.url", &t.url) {
+            errs.push(e);
         }
         check_headers("target.headers", &t.headers, &mut errs);
         if t.max_idle_conns < 0 {
