@@ -22,9 +22,19 @@ pub struct BootstrapClient {
 impl BootstrapClient {
     pub fn new(cfg: &TargetConfig) -> Result<Self, DataError> {
         let headers = base_headers(cfg)?;
-        let client = reqwest::Client::builder()
+        // Connection options as the attacker's client sets them, so a target
+        // that speaks only HTTP/2 (or must not reuse connections) is probed
+        // the way it is attacked.
+        let mut builder = reqwest::Client::builder()
             .timeout(cfg.timeout.as_std())
-            .danger_accept_invalid_certs(cfg.insecure_tls)
+            .danger_accept_invalid_certs(cfg.insecure_tls);
+        if !cfg.keep_alive.unwrap_or(true) {
+            builder = builder.pool_max_idle_per_host(0);
+        }
+        if cfg.http2 {
+            builder = builder.http2_prior_knowledge();
+        }
+        let client = builder
             .build()
             .map_err(|e| DataError::Http(e.to_string()))?;
         Ok(Self {
@@ -77,7 +87,7 @@ impl BootstrapClient {
             .send()
             .await
             .map_err(|e| DataError::Http(e.to_string()))?;
-        if resp.status() != reqwest::StatusCode::OK {
+        if !resp.status().is_success() {
             return Err(DataError::Status {
                 code: resp.status().as_u16(),
                 url: resp.url().to_string(),
@@ -139,6 +149,87 @@ pub async fn run_harvest(cfg: &Config, pools: &mut Pools) -> Result<(), DataErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// An HTTP/1.1 server answering every bodiless request with `status` and
+    /// `{}`, keeping connections open. Returns its base URL and a count of
+    /// the connections it accepted.
+    async fn serve(status: &'static str) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let conns = Arc::new(AtomicUsize::new(0));
+        let c = conns.clone();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                c.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let (mut data, mut buf) = (Vec::new(), [0u8; 1024]);
+                    while let Ok(n @ 1..) = sock.read(&mut buf).await {
+                        data.extend_from_slice(&buf[..n]);
+                        while let Some(i) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                            data.drain(..i + 4);
+                            let resp = format!("HTTP/1.1 {status}\r\nContent-Length: 2\r\n\r\n{{}}");
+                            let _ = sock.write_all(resp.as_bytes()).await;
+                        }
+                    }
+                });
+            }
+        });
+        (url, conns)
+    }
+
+    fn target(url: &str) -> TargetConfig {
+        TargetConfig {
+            url: url.into(),
+            timeout: crate::config::ConfigDuration(Duration::from_secs(5)),
+            ..Default::default()
+        }
+    }
+
+    fn get(path: &str) -> RequestConfig {
+        RequestConfig { path: path.into(), ..Default::default() }
+    }
+
+    #[tokio::test]
+    async fn harvest_accepts_any_2xx() {
+        let (url, _) = serve("201 Created").await;
+        let bc = BootstrapClient::new(&target(&url)).unwrap();
+        assert_eq!(bc.fetch(Protocol::Rest, &get("/items")).await.unwrap(), json!({}));
+        let (url, _) = serve("302 Found").await;
+        let bc = BootstrapClient::new(&target(&url)).unwrap();
+        let e = bc.fetch(Protocol::Rest, &get("/items")).await.unwrap_err();
+        assert!(matches!(e, DataError::Status { code: 302, .. }), "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn harvest_honours_keep_alive_off() {
+        for (keep_alive, want) in [(None, 1), (Some(false), 2)] {
+            let (url, conns) = serve("200 OK").await;
+            let bc = BootstrapClient::new(&TargetConfig { keep_alive, ..target(&url) }).unwrap();
+            for _ in 0..2 {
+                bc.fetch(Protocol::Rest, &get("/items")).await.unwrap();
+            }
+            assert_eq!(conns.load(Ordering::SeqCst), want, "keep_alive {keep_alive:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn harvest_speaks_http2_when_the_target_does() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let bc = BootstrapClient::new(&TargetConfig { http2: true, ..target(&url) }).unwrap();
+        let probe = tokio::spawn(async move { bc.fetch(Protocol::Rest, &get("/items")).await });
+        let (mut sock, _) = listener.accept().await.unwrap();
+        let mut preface = [0u8; 24];
+        sock.read_exact(&mut preface).await.unwrap();
+        assert_eq!(&preface, b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+        probe.abort();
+    }
 
     fn extract(pool: &str, path: &str) -> BTreeMap<String, String> {
         BTreeMap::from([(pool.to_string(), path.to_string())])

@@ -101,6 +101,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A GraphQL variable like `"{{ids}}}"` interpolates as the string `5}`
   instead of failing every request with `unknown pool ids}`, and an empty
   `{{}}` is reported as such instead of as `unknown pool` with no name.
+- Harvest probes accept any 2xx response (a `201`, say), not only `200`, and
+  connect as the attack does: over HTTP/2 when `target.http2` is set, and
+  without reusing connections when `target.keep_alive` is `false`.
 
 ## [0.5.1] - 2026-10-31
 
