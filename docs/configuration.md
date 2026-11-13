@@ -118,7 +118,7 @@ Without either, the run is a normal profile run and every `match` is ignored.
 | `format`       | enum     | inferred    | `json` \| `har`; inferred from the extension: `.har` is `har`, anything else is `json` (JSON lines) |
 | `window`       | object   | —           | `{ start, end }` RFC3339 timestamps; replay only entries in the half-open range `[start, end)`; `start` must be before `end` |
 | `speed`        | float    | `1.0`       | time compression: every gap is divided by `speed`, so `2.0` replays twice as fast. Must be > 0 |
-| `copies`       | int      | `1`         | amplification: overlay `copies` copies of the log (see below) |
+| `copies`       | int      | `1`         | amplification: overlay `copies` copies of the log (see below). Must be > 0 |
 | `on_unmatched` | enum     | `skip`      | `skip` \| `fail`: what to do with entries no scenario matches |
 | `fields`       | object   | see below   | JSONL field mapping |
 
@@ -145,11 +145,12 @@ log replays immediately.
 **Amplification.** `speed` divides every offset. `copies` overlays N copies of
 the matched log in parallel: copy *k* is rotated by *k*·span/N inside the
 original span (offsets that run past the end wrap to the start). This
-multiplies *total* and *average* volume by N over the *same* duration, but
-because the copies are staggered rather than stacked, the busiest instants are
-spread out: the **peak rate is not multiplied**. The `peak` value in the replay
-summary reports the effective peak after this rotation. Use `speed` to compress
-time and `copies` to multiply average load; they compose. The schedule is
+multiplies *total* and *average* volume by N over the *same* duration, and the
+**peak rate by up to N** as well: a steady log's peak is multiplied by N, and
+the stagger lowers it only when the log is bursty (the copies' bursts land at
+different instants). Check `peak` in the replay summary (`--validate` prints it
+without firing anything) before an amplified run. Use `speed` to compress time
+and `copies` to multiply load; they compose. The schedule is
 capped at 10,000,000 total hits (after `copies`); a larger one is a config
 error (exit `2`), so narrow the window or lower `copies`.
 
@@ -159,13 +160,14 @@ request, naming the most frequent unmatched entries.
 
 ### JSONL logs
 
-One JSON object per line; blank lines are ignored. `replay.fields` gives the
-dot path of each field in the object (same syntax as harvest `extract`:
-`a.b.c`, with `[]` to fan out an array, using the first value found).
+One JSON object per line; blank lines and a leading UTF-8 byte-order mark are
+ignored. `replay.fields` gives the dot path of each field in the object (same
+syntax as harvest `extract`: `a.b.c`, with `[]` to fan out an array, using the
+first value found).
 
 | `fields` key | default     | required | meaning |
 | ------------ | ----------- | -------- | ------- |
-| `ts`         | `ts`        | yes      | when the request happened. An RFC3339 string (`"2026-10-20T14:00:00.250Z"`, any UTC offset) or an epoch number whose **unit is inferred from magnitude**: `>= 1e17` is nanoseconds, `>= 1e14` microseconds, `>= 1e11` milliseconds, otherwise seconds (fractions allowed: `1760968800.25`) |
+| `ts`         | `ts`        | yes      | when the request happened. An RFC3339 string (`"2026-10-20T14:00:00.250Z"`, any UTC offset) or an epoch number (bare or quoted, `"1760968800"`) whose **unit is inferred from magnitude**: `>= 1e17` is nanoseconds, `>= 1e14` microseconds, `>= 1e11` milliseconds, otherwise seconds (fractions allowed: `1760968800.25`) |
 | `method`     | `method`    | yes      | HTTP method (case-insensitive) |
 | `path`       | `path`      | yes      | request path or URL; the scheme, host, query string, and fragment are stripped, and the rest must start with `/` |
 | `operation`  | `operation` | no       | GraphQL operation name; absent or non-string means "no operation" |
@@ -195,7 +197,8 @@ a physical file line.
 Replay needs at least one scenario with a `match`. Every parse, match, and
 schedule failure is exit `2` and happens **before any request is fired**.
 The run also exits `2` when nothing is left to send (every entry malformed,
-outside the window, or unmatched); the error lists the counts. The effective
+outside the window, or unmatched); the error lists the counts and the first
+three malformed-line reasons. The effective
 span after `speed` must be at most 24h — a larger one (usually a wrong
 timestamp unit or an outlier) is also exit `2`, so check the units, narrow
 `replay.window`, or raise `--speed`.
@@ -248,7 +251,8 @@ replay: configs/replay-sample.jsonl
 
 `hits` is what will fire (after `copies`), `span` the replay duration (after
 `speed`), and `peak` the most hits in any one-second window. Matched counts
-are per scenario before `copies`. Results are attributed to scenarios by name
+are per scenario before `copies`; every scenario with a `match` is listed, so
+one whose rule matched nothing (a typo'd `operation`, say) shows `0`. Results are attributed to scenarios by name
 in the per-operation report, as in a profile run. After every real run (not
 `--validate`) the block and manifest also carry a `fired` line
 (`fired : 14 of 16 (2 dropped)`), and the SLO results gain a
@@ -277,7 +281,7 @@ Each pool is keyed by name. `type` selects the source:
 data:
   pools:
     ids:          { type: range, min: 1, max: 1000 }
-    country_codes:{ type: list,  values: [US, CA] }
+    country_codes: { type: list,  values: [US, CA] }
     skus:         { type: file,  path: skus.txt, as: string }
     order_refs:   { type: uuid }
     order_no:     { type: sequence, start: 1000 }
@@ -309,6 +313,10 @@ JSON path and appends them into the named pools (creating a pool, or adding to
 an existing one). A path segment ending in `[]` fans out across an array. If a
 path matches nothing, the run fails with the pool and path named.
 
+In a flow mapping (`{ ... }`) a path containing `[]` must be quoted, as in
+`extract: { skus: "items[].sku" }`, or YAML fails to parse it; block style,
+as below, needs no quotes.
+
 ```yaml
 data:
   harvest:
@@ -318,7 +326,7 @@ data:
         skus: data.country.products[].sku
     # REST form:
     # - request: { method: GET, path: /products?limit=100 }
-    #   extract: { skus: items[].sku }
+    #   extract: { skus: "items[].sku" }
 ```
 
 ## `scenarios`
@@ -392,7 +400,9 @@ scenarios:
 
 Each log entry must match **at most one** scenario. An entry that matches two
 or more is an error (exit `2`, naming the log line and both scenarios), so
-make rules disjoint. An entry matching none is unmatched (see
+make rules disjoint. Two scenarios with an identical rule (the same
+`operation`, or the same `method` and `path`) are rejected by validation
+without reading the log. An entry matching none is unmatched (see
 `replay.on_unmatched`). The scenario's `request` is what gets sent: the
 matched log entry contributes only the scenario choice and its timing.
 
@@ -406,7 +416,7 @@ genuine transport error is never masked.
 | key              | type       | default | notes |
 | ---------------- | ---------- | ------- | ----- |
 | `status`         | list[int]  | `[]`    | allowed HTTP statuses; empty means the default 2xx/3xx |
-| `graphql_errors` | bool       | `true` for GraphQL, `false` for REST | a `200` carrying a non-empty top-level `errors` array counts as a failure |
+| `graphql_errors` | bool       | `true` for GraphQL, `false` for REST | a 2xx/3xx response carrying a non-empty top-level `errors` array counts as a failure |
 
 ## `slos`
 
@@ -429,8 +439,9 @@ and exits `1`. An interrupted run exits `130` instead.
 
 ## `report`
 
-Optional. Every run writes `report.dir/<UTC timestamp>/` and refreshes a
-`latest` symlink; see the [README](../README.md#reports) for the file list.
+Optional. Every run writes `report.dir/<UTC timestamp>/` (with `-1`, `-2`, …
+appended when another run already took that second) and refreshes a `latest`
+symlink; see the [README](../README.md#reports) for the file list.
 
 | key      | type | default   | notes |
 | -------- | ---- | --------- | ----- |

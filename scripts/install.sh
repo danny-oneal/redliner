@@ -37,9 +37,7 @@ os=$(uname -s)
 arch=$(uname -m)
 case "$os/$arch" in
     Linux/x86_64) target=x86_64-unknown-linux-musl ;;
-    Linux/aarch64 | Linux/arm64) target=aarch64-unknown-linux-musl ;;
     Darwin/arm64) target=aarch64-apple-darwin ;;
-    Darwin/x86_64) target=x86_64-apple-darwin ;;
     *) die "no prebuilt binary for $os/$arch; build from source: cargo install --git https://github.com/$repo redliner redliner-import --locked" ;;
 esac
 
@@ -54,6 +52,7 @@ if [ -z "$version" ]; then
     version=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp/releases.json" | head -n 1)
     [ -n "$version" ] || die "no releases found for $repo"
 fi
+version=v${version#v}
 
 base=${REDLINER_DOWNLOAD_URL:-https://github.com/$repo/releases/download/$version}
 asset="redliner-$version-$target.tar.gz"

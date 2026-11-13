@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+- Release archives for Windows, Intel macOS, ARM Linux and glibc Linux.
+  Releases ship two targets: static x86_64 Linux (musl) and Apple Silicon
+  macOS. `install.sh` now stops with a build-from-source hint on ARM Linux
+  and Intel macOS; elsewhere, build from source (`cargo install --git
+  https://github.com/danny-oneal/redliner redliner redliner-import --locked`).
+
 ### Added
 - `volley::Metrics::add_with_success`, for callers whose idea of success is
   not "no error and a 2xx/3xx code". `Metrics::add` keeps that default.
@@ -19,6 +26,55 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its success rate and throughput (0% when every response was an allowed
   status) and could fail its SLOs. A report written before this fix and one
   written after it are not comparable for such a config.
+- Two runs started in the same second into the same report directory
+  (parallel CI jobs, say) no longer share one run folder and overwrite each
+  other's files: the later one gets `<timestamp>-1`, `-2`, …, and `latest`
+  points at the folder each run actually used.
+- Every `results.jsonl` record now carries its `phase` and its send time
+  (`timestamp_ns`, Unix nanoseconds), so the stream can be plotted over time;
+  `seq` restarts every phase, so it alone could not order or place a hit.
+- `run_manifest.json` writes config durations as text the config accepts
+  back (`"timeout": "10s"`, `"5400s"`, `"1.5ms"`) instead of raw
+  nanoseconds (`"10000000000ns"`).
+- Error messages print each cause once: a YAML parse error no longer repeats
+  the parser's message, and a missing pool file reads `pool "ids": read
+  ids.txt: No such file or directory` instead of naming no path and repeating
+  the OS error three times.
+- A run whose stdout is closed before the summary is printed
+  (`redliner ... | head -1`) no longer panics with exit code 101; it exits
+  with its verdict (0, 1 or 130).
+- An interrupted run's summary labels its first line `run           :
+  INTERRUPTED (partial results)`; it shared the `status        :` label with
+  the status-class line, so a script matching that label read the wrong one.
+- A report file that can't be written no longer hides the run's result: the
+  summary (with the SLO verdict) is printed first, then the error, which now
+  names the file (`write reports: reports/…/metrics.json: Is a directory`
+  instead of `Is a directory`). The exit code is still 2.
+- Docs: the README's minimal config and two `docs/configuration.md` examples
+  (the `data.pools` block and the REST harvest form) now parse. A harvest
+  path containing `[]` must be quoted inside `{ ... }`.
+- `scripts/install.sh` accepts `REDLINER_VERSION` without the leading `v`
+  (`0.5.0` as well as `v0.5.0`) instead of failing with a 404.
+- Replay: when no events are left to replay, the error now shows the first
+  three malformed-line reasons (`line 1: missing field "ts"`), not only the
+  counts, so a wrong `replay.fields` mapping says what is wrong.
+- Replay: the summary lists every scenario with a `match` rule, so one that
+  matched nothing (a typo'd `match.operation`) shows `0` instead of being
+  left out.
+- Replay: a JSONL epoch timestamp logged as a quoted string
+  (`"ts":"1760968800"`, as nginx `$msec` writes it) is read as the number
+  instead of making the line malformed.
+- Replay: `speed: 0`, `copies: 0`, `--speed 0` and `--copies 0` are
+  validation errors (exit `2`) instead of silently meaning `1`.
+- Replay: two scenarios with an identical `match` rule are a validation
+  error, even when the log has no entry they would both match.
+- Replay: a UTF-8 byte-order mark at the start of a JSONL log no longer makes
+  the first line malformed (dropping its event).
+- Docs: `replay.copies` multiplies the peak rate by up to N, not only the
+  average; `docs/configuration.md` said the peak was not multiplied.
+- Replay reads a JSONL log line by line instead of loading the whole file
+  first, so peak memory no longer includes a copy of the raw log (a 132 MB
+  log: about 300 MB to 220 MB).
 - GraphQL scenario `headers` and every harvest request's `headers` are now
   sent. They were silently dropped, though `run_manifest.json` listed them.
   GraphQL scenario headers take `{{pool}}` placeholders, as REST ones do.
