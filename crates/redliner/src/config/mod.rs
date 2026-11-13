@@ -143,12 +143,18 @@ pub struct HarvestConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct Scenario {
     pub name: String,
+    /// Unset means 1, so a one-scenario config needs no weight.
+    #[serde(default = "default_weight")]
     pub weight: f64,
     pub request: RequestConfig,
     /// Replay-mode rule selecting which logged requests this scenario
     /// serves. Ignored in profile mode.
     #[serde(rename = "match")]
     pub matcher: Option<MatchConfig>,
+}
+
+fn default_weight() -> f64 {
+    1.0
 }
 
 /// Which logged entries a scenario replays. GraphQL scenarios match on
@@ -593,8 +599,8 @@ impl Config {
             if !seen.insert(s.name.as_str()) {
                 errs.push(format!("scenarios[{i}]: duplicate name {:?}", s.name));
             }
-            if self.replay.is_none() && s.weight <= 0.0 {
-                errs.push(format!("scenario {:?}: weight must be > 0", s.name));
+            if self.replay.is_none() && !positive_finite(s.weight) {
+                errs.push(format!("scenario {:?}: weight must be > 0 and finite", s.name));
             }
             if self.replay.is_some() {
                 if let Some(m) = &s.matcher {
@@ -645,6 +651,15 @@ impl Config {
                     }
                 }
             }
+        }
+
+        // Finite weights can still overflow the mix's cumulative total.
+        let total: f64 = self.scenarios.iter().map(|s| s.weight).sum();
+        if self.replay.is_none()
+            && self.scenarios.iter().all(|s| positive_finite(s.weight))
+            && !total.is_finite()
+        {
+            errs.push("scenarios: the total weight overflows; use smaller weights".into());
         }
 
         for (name, p) in &self.data.pools {

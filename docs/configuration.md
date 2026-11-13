@@ -334,7 +334,7 @@ instead.
 | key       | type   | notes |
 | --------- | ------ | ----- |
 | `name`    | string | used for per-operation report attribution |
-| `weight`  | float  | relative selection weight; must be > 0 in profile mode, ignored in replay mode |
+| `weight`  | float  | relative selection weight, default `1`; must be > 0 and finite in profile mode, ignored in replay mode |
 | `match`   | object | replay mode only: which log entries this scenario serves (see [`match`](#match)); ignored in profile mode |
 | `request` | object | the per-protocol request (below) |
 

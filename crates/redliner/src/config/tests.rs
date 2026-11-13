@@ -698,3 +698,25 @@ fn negative_max_idle_conns_rejected() {
     let t = err_text(load_str(&format!("{GQL_HEAD}  max_idle_conns: -1\n{ONE_GQL}")));
     assert!(t.contains("target.max_idle_conns must be >= 0, got -1"), "{t}");
 }
+
+#[test]
+fn weight_defaults_to_one() {
+    let c = load_str(&format!("{GQL_HEAD}scenarios:\n  - {{name: a, request: {{query: q}}}}\n")).unwrap();
+    assert_eq!(c.scenarios[0].weight, 1.0);
+}
+
+#[test]
+fn weights_must_be_positive_and_finite() {
+    for w in ["0", "-1", ".nan", ".inf"] {
+        let y = format!("{GQL_HEAD}scenarios:\n  - {{name: a, weight: {w}, request: {{query: q}}}}\n");
+        let t = err_text(load_str(&y));
+        assert!(t.contains("scenario \"a\": weight must be > 0 and finite"), "{w}: {t}");
+    }
+    // Finite weights whose sum is not: the mix would never pick the last one.
+    let y = format!(
+        "{GQL_HEAD}scenarios:\n  - {{name: a, weight: 1e308, request: {{query: q}}}}\n  \
+         - {{name: b, weight: 1e308, request: {{query: q}}}}\n"
+    );
+    let t = err_text(load_str(&y));
+    assert!(t.contains("scenarios: the total weight overflows; use smaller weights"), "{t}");
+}

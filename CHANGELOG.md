@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- `scenarios[].weight` defaults to `1`, so a one-scenario config (the README's
+  "minimal config") no longer needs it. An explicit `0` or negative weight is
+  still an error.
+
 ### Added
 - `volley::Metrics::add_with_success`, for callers whose idea of success is
   not "no error and a 2xx/3xx code". `Metrics::add` keeps that default.
@@ -39,6 +44,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only `0`), and a field the pool's type doesn't use (`as` on a `list`, `min`
   on a `sequence`) is an error instead of being ignored. A negative
   `target.max_idle_conns` is rejected; it used to turn connection pooling off.
+- A `weight` of `.nan` or `.inf`, or weights whose total overflows, is
+  rejected instead of leaving a scenario that never fires.
 
 ## [0.5.1] - 2026-10-31
 
