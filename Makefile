@@ -18,7 +18,7 @@ test:
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 
-## install the `redliner` binary into ~/.cargo/bin
+## install the `redliner` and `redliner-import` binaries into ~/.cargo/bin
 install:
 	cargo install --path crates/redliner --locked
 	cargo install --path crates/redliner-import --locked
