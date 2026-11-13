@@ -22,6 +22,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - GraphQL scenario `headers` and every harvest request's `headers` are now
   sent. They were silently dropped, though `run_manifest.json` listed them.
   GraphQL scenario headers take `{{pool}}` placeholders, as REST ones do.
+- A GraphQL scenario's `name` is sent as `operationName` only when its query
+  defines an operation by that name. It was always sent, so spec-compliant
+  servers rejected every anonymous query (the README's own example) with
+  `Unknown operation named ...`.
 
 ## [0.5.1] - 2026-10-31
 

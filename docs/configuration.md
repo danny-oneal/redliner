@@ -329,7 +329,7 @@ instead.
 
 | key       | type   | notes |
 | --------- | ------ | ----- |
-| `name`    | string | used for per-operation report attribution |
+| `name`    | string | used for per-operation report attribution; for GraphQL, also sent as `operationName` when the query defines an operation by that name (`query GetProduct($id: Int!) { ... }`), and left out otherwise, so an anonymous query works under any name |
 | `weight`  | float  | relative selection weight; must be > 0 in profile mode, ignored in replay mode |
 | `match`   | object | replay mode only: which log entries this scenario serves (see [`match`](#match)); ignored in profile mode |
 | `request` | object | the per-protocol request (below) |

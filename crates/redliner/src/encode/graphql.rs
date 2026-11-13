@@ -17,6 +17,10 @@ const QUERY_SET: &AsciiSet = &NON_ALPHANUMERIC
 
 struct GraphqlRoute {
     name: String,
+    /// The scenario name, sent as `operationName` only when the query defines
+    /// an operation by that name: a spec-compliant server rejects an
+    /// `operationName` the document does not define.
+    operation_name: Option<String>,
     /// Headers with fixed values.
     headers: HeaderMap,
     /// Headers whose values hold `{{pool}}` placeholders, rendered per request.
@@ -35,7 +39,13 @@ impl GraphqlEncoder {
         let mut routes = Vec::with_capacity(scenarios.len());
         for sc in scenarios {
             let (headers, templated) = scenario_headers(&base, &sc.request.headers)?;
-            routes.push(GraphqlRoute { name: sc.name.clone(), headers, templated });
+            routes.push(GraphqlRoute {
+                name: sc.name.clone(),
+                operation_name: defines_operation(&sc.request.query, &sc.name)
+                    .then(|| sc.name.clone()),
+                headers,
+                templated,
+            });
         }
         Ok(Self {
             endpoint: cfg.url.clone(),
@@ -60,12 +70,14 @@ impl GraphqlEncoder {
             pools,
             rng,
         )?;
-        let body = serde_json::to_vec(&serde_json::json!({
-            "operationName": sc.name,
+        let mut body = serde_json::json!({
             "query": sc.request.query,
             "variables": variables,
-        }))
-        .map_err(|e| EncodeError::Body(e.to_string()))?;
+        });
+        if let Some(op) = &route.operation_name {
+            body["operationName"] = op.as_str().into();
+        }
+        let body = serde_json::to_vec(&body).map_err(|e| EncodeError::Body(e.to_string()))?;
         t.method = Method::POST;
         // The op param is a correlation tag so per-operation metrics can be split out.
         t.url = format!("{}?op={}", self.endpoint, query_escape(&sc.name));
@@ -98,6 +110,78 @@ impl Encoder for GraphqlEncoder {
     fn operation(&self, _method: &str, url: &str) -> Option<String> {
         GraphqlEncoder::operation(self, url)
     }
+}
+
+/// Whether the GraphQL document `doc` defines an operation called `name`:
+/// `query name`, `mutation name` or `subscription name` outside any
+/// selection set, comment or string.
+fn defines_operation(doc: &str, name: &str) -> bool {
+    let b = doc.as_bytes();
+    let (mut i, mut depth, mut after_keyword) = (0, 0usize, false);
+    while i < b.len() {
+        let c = b[i];
+        if c == b'#' {
+            while i < b.len() && b[i] != b'\n' && b[i] != b'\r' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'"' {
+            i = skip_string(b, i);
+            after_keyword = false;
+            continue;
+        }
+        if c == b'_' || c.is_ascii_alphabetic() {
+            let start = i;
+            while i < b.len() && (b[i] == b'_' || b[i].is_ascii_alphanumeric()) {
+                i += 1;
+            }
+            let word = &doc[start..i];
+            if depth == 0 && after_keyword && word == name {
+                return true;
+            }
+            after_keyword =
+                depth == 0 && matches!(word, "query" | "mutation" | "subscription");
+            continue;
+        }
+        match c {
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        // Whitespace and commas are insignificant; any other token ends `query <name>`.
+        if !(c.is_ascii_whitespace() || c == b',') {
+            after_keyword = false;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// The index just past the string literal (`"..."` or `"""..."""`) at `i`.
+fn skip_string(b: &[u8], i: usize) -> usize {
+    if b[i..].starts_with(b"\"\"\"") {
+        let mut j = i + 3;
+        while j < b.len() {
+            if b[j..].starts_with(b"\\\"\"\"") {
+                j += 4;
+            } else if b[j..].starts_with(b"\"\"\"") {
+                return j + 3;
+            } else {
+                j += 1;
+            }
+        }
+        return b.len();
+    }
+    let mut j = i + 1;
+    while j < b.len() {
+        match b[j] {
+            b'\\' => j += 2,
+            b'"' | b'\n' => return j + 1,
+            _ => j += 1,
+        }
+    }
+    b.len()
 }
 
 fn query_escape(s: &str) -> String {
@@ -144,6 +228,41 @@ mod tests {
             scenarios,
         )
         .unwrap()
+    }
+
+    /// The `operationName` sent for a scenario called `name` with `query`.
+    fn sent_operation_name(name: &str, query: &str) -> Option<String> {
+        let mut sc = scenario(name);
+        sc.request.query = query.into();
+        let mut t = Target::default();
+        enc_for(std::slice::from_ref(&sc)).encode(&mut t, &sc, &Pools::new(), &mut rng()).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&t.body).unwrap();
+        v.get("operationName").map(|n| n.as_str().unwrap().to_string())
+    }
+
+    #[test]
+    fn operation_name_is_sent_only_when_the_query_defines_it() {
+        let named = |q: &str| sent_operation_name("GetProduct", q);
+        assert_eq!(named("query GetProduct($id: Int!) { p(id: $id) { id } }").as_deref(), Some("GetProduct"));
+        assert_eq!(named("mutation GetProduct { p }").as_deref(), Some("GetProduct"));
+        assert_eq!(
+            named("query Other { p }\nsubscription GetProduct { p }").as_deref(),
+            Some("GetProduct"),
+            "one of several operations"
+        );
+        // Anonymous operations: the README's own example shape.
+        assert_eq!(named("query($id:Int!){ product(id:$id){ name } }"), None);
+        assert_eq!(named("{ product(id: 1) { name } }"), None);
+        assert_eq!(named("query { p }"), None);
+        // The name elsewhere is not an operation definition.
+        assert_eq!(named("query GetProducts { p }"), None, "a prefix");
+        assert_eq!(named("query Other { query GetProduct }"), None, "inside a selection set");
+        assert_eq!(named("# query GetProduct\n{ p }"), None, "in a comment");
+        assert_eq!(named(r#"{ p(q: "} query GetProduct {") }"#), None, "in a string");
+        assert_eq!(named(r#"{ p(q: """ \""" } query GetProduct """) }"#), None, "in a block string");
+        assert_eq!(named("fragment GetProduct on P { id } { p }"), None, "a fragment");
+        // A scenario name that is not a GraphQL name never matches.
+        assert_eq!(sent_operation_name("product lookup", "{ product(id: 1) { name } }"), None);
     }
 
     #[test]
