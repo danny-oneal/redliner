@@ -28,6 +28,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - A spec value carrying DEL, a C1 control character (a mis-decoded
     Windows-1252 apostrophe, U+0092, say) or U+FFFE/U+FFFF no longer produces
     a draft that fails to load; such characters are written escaped.
+  - A parameter whose example is an array or object gets a TODO naming its
+    serialization style, and an array sends its first element, instead of
+    silently sending the example as JSON text (`?tags=["red","blue"]`).
 
 ## [0.5.1] - 2026-10-31
 

@@ -262,7 +262,9 @@ The draft is a starting point to review, not a finished benchmark:
   own list pool, filled from the spec's `example`/`default`/`enum` where one
   exists; otherwise it
   holds a typed placeholder with a `# TODO: real values` comment. Replace
-  those (or fill them with `data.harvest`).
+  those (or fill them with `data.harvest`). An array or object example is
+  marked TODO too: the draft sends an array's first element (an object as
+  JSON), not the parameter's serialization `style`.
 - **Safe by default.** OpenAPI `POST`/`PUT`/`PATCH`/`DELETE` operations are
   written commented out; pass `--include-unsafe` to emit them live. GraphQL
   mutations are listed in the notes, not scaffolded.

@@ -168,9 +168,49 @@ pub fn params(doc: &Value, ver: Version, path_item: &Value, op: &Value) -> Resul
         let required = location == Location::Path
             || p.get("required").and_then(Value::as_bool).unwrap_or(false);
         let (values, todo) = param_values(doc, ver, p);
+        let (values, todo) = match non_scalar_todo(ver, location, p, &values) {
+            Some(t) => (values.into_iter().map(first_scalar).collect(), Some(t)),
+            None => (values, todo),
+        };
         out.push(Param { name, location, required, values, todo });
     }
     Ok(out)
+}
+
+/// A TODO when an example is an array or object: its wire form depends on
+/// the parameter's style, which the draft does not apply.
+fn non_scalar_todo(ver: Version, location: Location, p: &Value, values: &[Value]) -> Option<String> {
+    let kind = if values.iter().any(Value::is_object) {
+        "object"
+    } else if values.iter().any(Value::is_array) {
+        "array"
+    } else {
+        return None;
+    };
+    let style = match ver {
+        Version::Swagger2 => {
+            format!("collectionFormat: {}", p.get("collectionFormat").and_then(Value::as_str).unwrap_or("csv"))
+        }
+        Version::OpenApi3 => {
+            let default = match location {
+                Location::Query | Location::Cookie => "form",
+                Location::Path | Location::Header => "simple",
+            };
+            let style = p.get("style").and_then(Value::as_str).unwrap_or(default);
+            let explode = p.get("explode").and_then(Value::as_bool).unwrap_or(style == "form");
+            format!("style: {style}, explode: {explode}")
+        }
+    };
+    let sent = if kind == "array" { "only its first element is sent" } else { "sent as JSON" };
+    Some(format!("{kind} parameter ({style}); {sent}"))
+}
+
+/// An array's first element when that is a scalar, else `v`.
+fn first_scalar(v: Value) -> Value {
+    match v.as_array().and_then(|a| a.first()) {
+        Some(first) if !first.is_array() && !first.is_object() => first.clone(),
+        _ => v,
+    }
 }
 
 /// `v`'s `parameters`, each resolved; a reference that can't be is the

@@ -395,6 +395,39 @@ mod tests {
     }
 
     #[test]
+    fn array_and_object_parameter_examples_are_marked_todo() {
+        // Their wire form depends on the parameter's style; JSON text is not it.
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {"/a/{ids}": {"get": {
+            "operationId": "a", "parameters": [
+                {"name": "tags", "in": "query", "required": true, "example": ["red", "blue"]},
+                {"name": "filter", "in": "query", "required": true, "explode": false, "example": {"name": "x"}},
+                {"name": "ids", "in": "path", "required": true, "schema": {"example": [1, 2]}}
+            ]
+        }}}});
+        let d = draft(&doc, &opts(false)).unwrap();
+        assert_eq!(
+            pool(&d, "a_tags"),
+            (json!(["red"]), Some("array parameter (style: form, explode: true); only its first element is sent".into()))
+        );
+        assert_eq!(
+            pool(&d, "a_filter"),
+            (json!([{"name": "x"}]), Some("object parameter (style: form, explode: false); sent as JSON".into()))
+        );
+        assert_eq!(
+            pool(&d, "a_ids"),
+            (json!([1]), Some("array parameter (style: simple, explode: false); only its first element is sent".into()))
+        );
+        let sw2 = json!({"swagger": "2.0", "host": "h", "paths": {"/b": {"get": {"operationId": "b", "parameters": [
+            {"name": "tags", "in": "query", "required": true, "type": "array", "x-example": ["red", "blue"]}
+        ]}}}});
+        let d = draft(&sw2, &opts(false)).unwrap();
+        assert_eq!(
+            pool(&d, "b_tags"),
+            (json!(["red"]), Some("array parameter (collectionFormat: csv); only its first element is sent".into()))
+        );
+    }
+
+    #[test]
     fn accept_and_content_type_header_parameters_are_ignored() {
         // OpenAPI 3: header parameters named Accept or Content-Type SHALL be ignored.
         let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {"/a": {"get": {
