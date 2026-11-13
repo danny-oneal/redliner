@@ -1319,3 +1319,113 @@ async fn e2e_report_write_failure_still_prints_the_summary() {
     assert!(stdout.contains("==== redliner summary ===="), "the verdict is still shown: {stdout}");
     assert!(stderr.contains(blocker.to_str().unwrap()), "names the path: {stderr}");
 }
+
+#[tokio::test]
+async fn e2e_elapsed_excludes_the_warmup() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("warmup-elapsed");
+    let cfg = write_cfg(&dir, &mock.url, "report:\n  junit: true\n");
+    let out = dir.to_str().unwrap();
+    let code = run(args(&cfg, &["--out", out, "--warmup", "1s", "--duration", "500ms"])).await;
+    assert_eq!(code, Exit::Ok);
+
+    let junit = std::fs::read_to_string(newest_report(&dir).join("junit.xml")).unwrap();
+    let time: f64 = junit
+        .split("time=\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("no time in {junit}"));
+    // The measured 500ms, not the 1.5s that includes the warmup.
+    assert!((0.4..0.9).contains(&time), "junit time {time}: {junit}");
+}
+
+#[tokio::test]
+async fn e2e_warmup_runs_at_a_tenth_of_a_fractional_rate() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("warmup-rate");
+    let cfg = write_cfg(&dir, &mock.url, "");
+    let out = dir.to_str().unwrap();
+    let flags = ["--out", out, "--rate", "19", "--warmup", "2s", "--duration", "200ms"];
+    assert_eq!(run(args(&cfg, &flags)).await, Exit::Ok);
+
+    let measured = read_metrics(&dir)["requests"].as_u64().unwrap() as usize;
+    let warmup = mock.hits.load(Ordering::SeqCst) - measured;
+    // 1.9 rps for 2s: hits at ~0.53s, 1.05s and 1.58s. Truncated to 1 rps,
+    // the warmup fired one.
+    assert_eq!(warmup, 3, "{measured} measured hits");
+}
+
+/// Answers every request `{"data":{}}` over keep-alive connections, counting
+/// the connections it accepts.
+async fn spawn_keepalive_mock() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let conns = Arc::new(AtomicUsize::new(0));
+    let c = conns.clone();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            c.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let mut data = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    data.extend_from_slice(&buf[..n]);
+                    // Answer each complete request in the buffer.
+                    loop {
+                        let text = String::from_utf8_lossy(&data).to_string();
+                        let Some(idx) = text.find("\r\n\r\n") else { break };
+                        let len = text[..idx]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if data.len() < idx + 4 + len {
+                            break;
+                        }
+                        data.drain(..idx + 4 + len);
+                        let payload = "{\"data\":{}}";
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}",
+                            payload.len()
+                        );
+                        if sock.write_all(resp.as_bytes()).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    (format!("http://{addr}/graphql"), conns)
+}
+
+#[tokio::test]
+async fn e2e_warmup_and_phases_share_one_connection_pool() {
+    let (url, conns) = spawn_keepalive_mock().await;
+    let dir = tempdir("one-pool");
+    let p = dir.join("cfg.yaml");
+    std::fs::write(
+        &p,
+        format!(
+            "target:\n  url: {url}\nload:\n  profile: steps\n  warmup: 300ms\n  steps:\n\
+             \x20   - {{ rate: 100, duration: 300ms }}\n\
+             \x20   - {{ rate: 100, duration: 300ms }}\n\
+             \x20   - {{ rate: 100, duration: 300ms }}\n\
+             scenarios:\n  - name: ping\n    weight: 1\n    request:\n      query: \"{{ ping }}\"\n"
+        ),
+    )
+    .unwrap();
+    assert_eq!(run(args(&p, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
+    // One hit every 10ms, each answered at once: the warmup's connection
+    // serves every phase. An attacker per phase opened one each (4 or more).
+    let n = conns.load(Ordering::SeqCst);
+    assert!(n <= 2, "{n} connections");
+}

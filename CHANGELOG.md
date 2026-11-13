@@ -103,6 +103,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (at 5000 rps ~80% of hits went out within 50 µs of the previous one).
   The scheduler sleeps to within a millisecond of each hit and spins the
   rest, so such rates keep up to one core busy.
+- The warmup and every phase share one HTTP client, so the measured run
+  starts on the warmup's open connections and each `steps` phase on the
+  last one's. A fresh client per phase put cold TCP/TLS handshakes into the
+  first latencies of every phase.
+- The summary's `elapsed` and the JUnit `time` cover the measured run only;
+  they included the unmeasured warmup.
+- The warmup runs at 10% of the first phase's rate without rounding it down
+  to whole requests per second (rate 15 warmed at 1 rps, not 1.5; rate 2.5 at
+  1 rps, not 0.25).
 
 ## [0.5.1] - 2026-10-31
 

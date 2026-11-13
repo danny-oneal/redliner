@@ -227,7 +227,8 @@ where
         let _ = stop_tx.send(true);
     });
 
-    let start = Instant::now();
+    // A profile run's clock restarts after its warmup, which isn't measured.
+    let mut start = Instant::now();
 
     // Results flow through the checker (which reclassifies app-layer
     // failures) into the collector.
@@ -242,7 +243,8 @@ where
     let mut live = Live::new(cfg.report.live_stats.unwrap_or_default().as_std());
     let fired = match plan {
         Plan::Profile(t, phases) => {
-            attack_profile(&cfg, t, &phases, &checker, &mut collector, &stop, &mut live).await?;
+            start =
+                attack_profile(&cfg, t, &phases, &checker, &mut collector, &stop, &mut live).await?;
             None
         }
         Plan::Replay(t, schedule) => Some(
@@ -343,7 +345,8 @@ enum Plan {
     Replay(Arc<ScheduleTargeter>, Arc<Schedule>),
 }
 
-/// Warmup, then one fresh attacker per phase.
+/// Warmup, then each phase, all on one attacker so connections carry over.
+/// Returns when the measured phases began.
 async fn attack_profile(
     cfg: &Config,
     targeter: Arc<MixTargeter>,
@@ -352,26 +355,25 @@ async fn attack_profile(
     collector: &mut Collector,
     stop: &watch::Receiver<bool>,
     live: &mut Live,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Instant> {
+    let attacker = new_attacker(cfg)?;
     // Warmup: uniform, unmeasured, 10% of the first phase's rate.
     let warmup = cfg.load.warmup.as_std();
     if !warmup.is_zero() {
         let first_rate = phases.first().map_or(0.0, |p| p.rate);
-        let freq = ((first_rate / 10.0) as u64).max(1);
-        let pacer = Arc::new(ConstantPacer { freq, per: Duration::from_secs(1) });
-        let attacker = new_attacker(cfg)?;
+        let pacer = Arc::new(ConstantPacer::from_rate(first_rate / 10.0));
         let mut rx =
             attacker.attack_until(targeter.clone(), pacer, warmup, "warmup".into(), stop.clone());
         while rx.recv().await.is_some() {}
     }
 
+    let start = Instant::now();
     live.begin();
     for ph in phases {
         if *stop.borrow() {
             break;
         }
         eprintln!("attack: {} for {:?} (nominal {} rps)", ph.name, ph.duration, ph.rate);
-        let attacker = new_attacker(cfg)?;
         let mut rx = attacker.attack_until(
             targeter.clone(),
             Arc::new(DynPacer(ph.pacer.clone())),
@@ -387,7 +389,7 @@ async fn attack_profile(
             collector.add(&r, ok, &ph.name, op.as_deref());
         }
     }
-    Ok(())
+    Ok(start)
 }
 
 /// One attacker that fires each scheduled hit at its offset, attributing
