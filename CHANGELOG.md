@@ -26,6 +26,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Every `results.jsonl` record now carries its `phase` and its send time
   (`timestamp_ns`, Unix nanoseconds), so the stream can be plotted over time;
   `seq` restarts every phase, so it alone could not order or place a hit.
+- `run_manifest.json` writes config durations as text the config accepts
+  back (`"timeout": "10s"`, `"5400s"`, `"1.5ms"`) instead of raw
+  nanoseconds (`"10000000000ns"`).
 
 ## [0.5.1] - 2026-10-31
 
