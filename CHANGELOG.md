@@ -19,6 +19,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its success rate and throughput (0% when every response was an allowed
   status) and could fail its SLOs. A report written before this fix and one
   written after it are not comparable for such a config.
+- The `poisson` profile (the default) now fires a Poisson process. It used
+  to track the mean rate within about one hit, a near-constant load with
+  little of the burstiness that drives queueing and tail latency (per-second
+  counts had an index of dispersion of ~0.015 instead of ~1). Expect higher
+  tail latencies than before at the same `rate`, and a different sequence of
+  send times for a given `load.seed`.
+- `redliner-volley`: `PoissonPacer` stops on a NaN or infinite rate instead
+  of panicking in the scheduler task.
 
 ## [0.5.1] - 2026-10-31
 
