@@ -165,7 +165,7 @@ dot path of each field in the object (same syntax as harvest `extract`:
 
 | `fields` key | default     | required | meaning |
 | ------------ | ----------- | -------- | ------- |
-| `ts`         | `ts`        | yes      | when the request happened. An RFC3339 string (`"2026-10-20T14:00:00.250Z"`, any UTC offset) or an epoch number whose **unit is inferred from magnitude**: `>= 1e17` is nanoseconds, `>= 1e14` microseconds, `>= 1e11` milliseconds, otherwise seconds (fractions allowed: `1760968800.25`) |
+| `ts`         | `ts`        | yes      | when the request happened. An RFC3339 string (`"2026-10-20T14:00:00.250Z"`, any UTC offset) or an epoch number (bare or quoted, `"1760968800"`) whose **unit is inferred from magnitude**: `>= 1e17` is nanoseconds, `>= 1e14` microseconds, `>= 1e11` milliseconds, otherwise seconds (fractions allowed: `1760968800.25`) |
 | `method`     | `method`    | yes      | HTTP method (case-insensitive) |
 | `path`       | `path`      | yes      | request path or URL; the scheme, host, query string, and fragment are stripped, and the rest must start with `/` |
 | `operation`  | `operation` | no       | GraphQL operation name; absent or non-string means "no operation" |

@@ -195,12 +195,16 @@ fn required_str(doc: &Value, path: &str) -> Result<String, String> {
     }
 }
 
-/// A string is RFC3339; a number is an epoch whose unit is inferred from its
-/// magnitude: `>= 1e17` → nanoseconds, `>= 1e14` → microseconds, `>= 1e11` →
-/// milliseconds, else seconds (fractions allowed).
+/// A string is RFC3339, or else a quoted epoch number; a number is an epoch
+/// whose unit is inferred from its magnitude: `>= 1e17` → nanoseconds,
+/// `>= 1e14` → microseconds, `>= 1e11` → milliseconds, else seconds
+/// (fractions allowed).
 fn parse_ts(v: &Value) -> Result<DateTime<Utc>, String> {
     match v {
-        Value::String(s) => parse_rfc3339(s),
+        Value::String(s) => parse_rfc3339(s).or_else(|e| match s.parse::<serde_json::Number>() {
+            Ok(n) => parse_ts(&Value::Number(n)),
+            Err(_) => Err(e),
+        }),
         Value::Number(n) => {
             let f = n
                 .as_f64()
@@ -323,6 +327,27 @@ mod tests {
         let t = parse_jsonl(text, &default_fields());
         assert_eq!(t.malformed, 0);
         assert_eq!(offsets(&t), [Duration::ZERO, Duration::from_millis(500)]);
+    }
+
+    #[test]
+    fn jsonl_numeric_string_timestamp_is_epoch() {
+        // nginx `$msec` and friends log the epoch as a quoted string.
+        let text = "{\"ts\":\"1760968800\",\"method\":\"GET\",\"path\":\"/a\"}\n\
+                    {\"ts\":\"1760968800500\",\"method\":\"GET\",\"path\":\"/b\"}\n\
+                    {\"ts\":\"1760968801250000\",\"method\":\"GET\",\"path\":\"/c\"}\n\
+                    {\"ts\":\"soon\",\"method\":\"GET\",\"path\":\"/d\"}\n";
+        let t = parse_jsonl(text, &default_fields());
+        assert_eq!(
+            offsets(&t),
+            [Duration::ZERO, Duration::from_millis(500), Duration::from_millis(1250)]
+        );
+        // A string that is neither still reports the RFC3339 failure.
+        assert_eq!(t.malformed, 1);
+        assert!(
+            t.malformed_examples[0].contains("\"soon\" is not an RFC3339 timestamp"),
+            "{:?}",
+            t.malformed_examples
+        );
     }
 
     #[test]
