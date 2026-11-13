@@ -415,6 +415,23 @@ async fn e2e_rest_hits_are_attributed_whatever_their_values() {
     assert_eq!(attributed, total, "{per_op:#}");
 }
 
+#[tokio::test]
+async fn e2e_rest_values_are_percent_encoded_in_the_url() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("awkward-encoding");
+    let cfg = write_awkward_values_cfg(&dir, &origin(&mock));
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap(), "--live-stats", "0s"])).await, Exit::Ok);
+    let want: Vec<String> = ["hot%20latte", "a%26b%3Dc", "x%2Fy"]
+        .iter()
+        .flat_map(|v| [format!("GET /products?sku={v} HTTP/1.1"), format!("GET /products/{v} HTTP/1.1")])
+        .collect();
+    let lines = mock.lines.lock().unwrap();
+    assert!(lines.len() > 10, "saw {} requests", lines.len());
+    for l in lines.iter() {
+        assert!(want.contains(l), "unexpected request line {l:?}");
+    }
+}
+
 /// Writes `log.jsonl` (ops a,b,a,b,a 150ms apart, plus one unmatched
 /// `health` event) and a replay config with scenarios `a` and `b`.
 /// Returns `(config path, log path)`.

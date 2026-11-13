@@ -348,7 +348,7 @@ instead.
 | key       | type   | default | notes |
 | --------- | ------ | ------- | ----- |
 | `method`  | string | `GET`   | upper-cased |
-| `path`    | string | —       | appended to `target.url`; may contain `{{pool}}` placeholders |
+| `path`    | string | —       | appended to `target.url`; may contain `{{pool}}` placeholders, whose values are percent-encoded (all but `A-Za-z0-9-._~`), so each stays one path segment or query value |
 | `body`    | string | —       | request body; `{{pool}}` placeholders are rendered; sets `Content-Type: application/json` when present and none is given |
 | `headers` | map    | `{}`    | per-scenario, override the base headers for that route only; values may contain `{{pool}}` placeholders (e.g. `Idempotency-Key: "{{order_refs}}"`), rendered per request after the path and body |
 

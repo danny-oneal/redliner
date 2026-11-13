@@ -1,19 +1,12 @@
 use http::{HeaderMap, HeaderValue, Method};
-use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::utf8_percent_encode;
 use rand_chacha::ChaCha8Rng;
 use volley::Target;
 
 use super::headers::{base_headers, render_templates, scenario_headers, HeaderTemplate};
-use super::{EncodeError, Encoder};
+use super::{EncodeError, Encoder, URL_COMPONENT};
 use crate::config::{Scenario, TargetConfig};
 use crate::data::{render_value, Pools};
-
-/// Go `url.QueryEscape` keeps only alphanumerics and `-_.~`.
-const QUERY_SET: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'_')
-    .remove(b'.')
-    .remove(b'~');
 
 struct GraphqlRoute {
     name: String,
@@ -174,7 +167,7 @@ fn skip_string(b: &[u8], i: usize) -> usize {
 }
 
 fn query_escape(s: &str) -> String {
-    utf8_percent_encode(s, QUERY_SET)
+    utf8_percent_encode(s, URL_COMPONENT)
         .to_string()
         .replace("%20", "+")
 }

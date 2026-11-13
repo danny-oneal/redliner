@@ -6,6 +6,7 @@ pub mod rest;
 
 use std::sync::Arc;
 
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use volley::{Target, Targeter};
@@ -31,6 +32,15 @@ pub enum EncodeError {
     #[error("bad template: {0}")]
     BadTemplate(String),
 }
+
+/// What a value spliced into a URL is percent-encoded with: everything but
+/// the RFC 3986 unreserved characters `A-Za-z0-9-._~` (as Go's
+/// `url.QueryEscape`), so it stays one path segment or one query value.
+pub const URL_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
 
 /// A protocol encoder: turns a picked scenario into a volley `Target`.
 pub trait Encoder: Send + Sync {

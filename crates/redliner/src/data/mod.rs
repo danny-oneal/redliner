@@ -250,6 +250,17 @@ fn kind(v: &Value) -> &'static str {
 /// embedded values are stringified. Sampled values are inserted verbatim and
 /// never rescanned, so a value containing `{{` is data, not a placeholder.
 pub fn render_string(s: &str, pools: &Pools, rng: &mut ChaCha8Rng) -> Result<String, EncodeError> {
+    render_escaped(s, pools, rng, |out, v| out.push_str(v))
+}
+
+/// Like [`render_string`], but `splice` appends each sampled value to the
+/// output (escaping it for its context); the template text is kept as written.
+pub fn render_escaped(
+    s: &str,
+    pools: &Pools,
+    rng: &mut ChaCha8Rng,
+    splice: impl Fn(&mut String, &str),
+) -> Result<String, EncodeError> {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(start) = rest.find("{{") {
@@ -263,7 +274,7 @@ pub fn render_string(s: &str, pools: &Pools, rng: &mut ChaCha8Rng) -> Result<Str
             .get(name)
             .ok_or_else(|| EncodeError::UnknownPool(name.to_string()))?;
         out.push_str(&rest[..start]);
-        out.push_str(&stringify(&pool.sample(rng)));
+        splice(&mut out, &stringify(&pool.sample(rng)));
         rest = &rest[start + end + 2..];
     }
     out.push_str(rest);

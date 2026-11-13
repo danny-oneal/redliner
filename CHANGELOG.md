@@ -34,6 +34,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Per-operation reports count every REST hit. Hits were matched back to their
   scenario from the URL, which lost any hit whose sampled value held `/`, `&`
   or `?`; they are now attributed by the scenario that built them.
+- REST pool values are percent-encoded where a `path` splices them in, so
+  `sku={{skus}}` with the value `a&b=c` sends one `sku` parameter, not two,
+  and a value holding `/` or `?` no longer changes the route. Only the
+  template text of `path` is sent as written; bodies and headers are
+  unchanged.
 
 ## [0.5.1] - 2026-10-31
 

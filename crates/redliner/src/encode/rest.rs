@@ -1,11 +1,12 @@
 use http::{HeaderMap, HeaderValue, Method};
+use percent_encoding::utf8_percent_encode;
 use rand_chacha::ChaCha8Rng;
 use volley::Target;
 
 use super::headers::{base_headers, render_templates, scenario_headers, HeaderTemplate};
-use super::{EncodeError, Encoder};
+use super::{EncodeError, Encoder, URL_COMPONENT};
 use crate::config::{Scenario, TargetConfig};
-use crate::data::{render_string, Pools};
+use crate::data::{render_escaped, render_string, Pools};
 
 struct RestRoute {
     name: String,
@@ -58,11 +59,12 @@ impl Encoder for RestEncoder {
             .ok_or_else(|| EncodeError::InvalidHeader(format!("unknown scenario {}", sc.name)))?;
         t.method = Method::from_bytes(route.method.as_bytes())
             .map_err(|e| EncodeError::InvalidHeader(format!("method {}: {e}", route.method)))?;
-        t.url = format!(
-            "{}{}",
-            self.base_url,
-            render_string(&sc.request.path, pools, rng)?
-        );
+        // Each value is encoded as one path segment or query value, so a `/`,
+        // `&` or `?` in it can't change the route or add a parameter.
+        let path = render_escaped(&sc.request.path, pools, rng, |out, v| {
+            out.extend(utf8_percent_encode(v, URL_COMPONENT))
+        })?;
+        t.url = format!("{}{}", self.base_url, path);
         t.header = route.headers.clone();
         if !sc.request.body.is_empty() {
             t.body = render_string(&sc.request.body, pools, rng)?.into_bytes();
@@ -177,6 +179,20 @@ mod tests {
         let mut t = Target::default();
         enc.encode(&mut t, &s, &pools, &mut rng()).unwrap();
         assert_eq!(t.url, "http://h/products/5");
+    }
+
+    #[test]
+    fn rest_path_values_are_percent_encoded() {
+        let s = sc("Search", "GET", "/p/{{v}}?q={{v}}&n=1", "{\"v\":\"{{v}}\"}", &[]);
+        let enc = RestEncoder::new(&target("http://h"), std::slice::from_ref(&s)).unwrap();
+        let mut pools = Pools::new();
+        pools.insert("v".into(), Pool::List(vec![serde_json::json!("a&b=c/d?e f#g%h+é")]));
+        let mut t = Target::default();
+        enc.encode(&mut t, &s, &pools, &mut rng()).unwrap();
+        let v = "a%26b%3Dc%2Fd%3Fe%20f%23g%25h%2B%C3%A9";
+        assert_eq!(t.url, format!("http://h/p/{v}?q={v}&n=1"));
+        // Only the URL is encoded: the body carries the value as is.
+        assert_eq!(t.body, "{\"v\":\"a&b=c/d?e f#g%h+é\"}".as_bytes());
     }
 
     #[test]
