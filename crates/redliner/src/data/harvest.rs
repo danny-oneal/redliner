@@ -7,6 +7,7 @@ use http::{HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 
 use super::{extract_path, DataError, Pool, Pools};
+use crate::checks::first_graphql_error;
 use crate::config::{Config, Protocol, RequestConfig, TargetConfig};
 use crate::encode::headers::{base_headers, set};
 
@@ -97,19 +98,6 @@ impl BootstrapClient {
     }
 }
 
-/// Message of the first entry of a non-empty top-level `errors` array.
-/// No shared graphql-errors helper is reachable from the data module, so
-/// this mirrors Go's `errsPresent`/`firstGraphQLError` minimally.
-fn first_graphql_error(doc: &Value) -> Option<String> {
-    let first = doc.get("errors")?.as_array()?.first()?;
-    Some(
-        first
-            .get("message")
-            .and_then(Value::as_str)
-            .map_or_else(|| first.to_string(), str::to_string),
-    )
-}
-
 /// Extracts each `pool -> path` from `doc` and appends into the pools.
 fn apply_extract(
     doc: &Value,
@@ -175,15 +163,5 @@ mod tests {
         let err = apply_extract(&doc, &extract("ids", "data.items[].id"), &mut pools).unwrap_err();
         assert!(matches!(err, DataError::EmptyMatch { .. }), "{err:?}");
         assert!(pools.is_empty());
-    }
-
-    #[test]
-    fn graphql_errors_detected() {
-        assert_eq!(
-            first_graphql_error(&json!({"errors":[{"message":"boom"}]})).as_deref(),
-            Some("boom")
-        );
-        assert!(first_graphql_error(&json!({"errors":[]})).is_none());
-        assert!(first_graphql_error(&json!({"data":{}})).is_none());
     }
 }
