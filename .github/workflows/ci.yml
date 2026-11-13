@@ -28,10 +28,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Clippy (warnings as errors)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       # Builds the packaged redliner against the packaged engine, as crates.io would.
       - name: Package

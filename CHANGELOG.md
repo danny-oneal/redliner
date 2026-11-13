@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+- Release archives for Windows, Intel macOS, ARM Linux and glibc Linux.
+  Releases ship two targets: static x86_64 Linux (musl) and Apple Silicon
+  macOS. `install.sh` now stops with a build-from-source hint on ARM Linux
+  and Intel macOS; elsewhere, build from source (`cargo install --git
+  https://github.com/danny-oneal/redliner redliner redliner-import --locked`).
+
 ### Added
 - `volley::Metrics::add_with_success`, for callers whose idea of success is
   not "no error and a 2xx/3xx code". `Metrics::add` keeps that default.
@@ -43,6 +50,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   summary (with the SLO verdict) is printed first, then the error, which now
   names the file (`write reports: reports/…/metrics.json: Is a directory`
   instead of `Is a directory`). The exit code is still 2.
+- Docs: the README's minimal config and two `docs/configuration.md` examples
+  (the `data.pools` block and the REST harvest form) now parse. A harvest
+  path containing `[]` must be quoted inside `{ ... }`.
+- `scripts/install.sh` accepts `REDLINER_VERSION` without the leading `v`
+  (`0.5.0` as well as `v0.5.0`) instead of failing with a 404.
 
 ## [0.5.1] - 2026-10-31
 

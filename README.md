@@ -18,8 +18,8 @@ exit code. Every run leaves a timestamped report directory for audit and
 dashboards.
 
 It is a from-scratch Rust port of an internal Go/Vegeta harness, built as a
-Cargo workspace: a reusable async load engine (`volley`, packaged as `redliner-volley`) and the configurable
-binary (`redliner`).
+Cargo workspace: a reusable async load engine (`volley`, packaged as `redliner-volley`), the configurable
+binary (`redliner`), and `redliner-import`, which drafts a config from a schema.
 
 ## Features
 
@@ -52,7 +52,7 @@ binary (`redliner`).
 
 ## Install
 
-**Prebuilt binaries** (Linux x86_64/arm64, macOS). The script picks the release
+**Prebuilt binaries** (Linux x86_64, macOS on Apple Silicon). The script picks the release
 asset for your platform, checks it against the release's SHA-256 checksum, and
 installs `redliner` and [`redliner-import`](#scaffold-a-config-from-a-schema)
 to `~/.local/bin`:
@@ -61,11 +61,11 @@ to `~/.local/bin`:
 curl -fsSL https://raw.githubusercontent.com/danny-oneal/redliner/main/scripts/install.sh | sh
 ```
 
-Set `REDLINER_VERSION=v0.2.0` to pin a release or `REDLINER_INSTALL_DIR` to
+Set `REDLINER_VERSION=vX.Y.Z` to pin a release or `REDLINER_INSTALL_DIR` to
 install elsewhere. The Linux binaries are static (musl), so they run on any
-distro and in `scratch`/distroless images. Windows builds are attached to each
-[release](https://github.com/danny-oneal/redliner/releases) as a `.zip` with a
-`.sha256`.
+distro and in `scratch`/distroless images. Releases ship Linux x86_64 and
+Apple Silicon macOS binaries only; anywhere else (ARM Linux, Intel macOS,
+Windows), build from source.
 
 **From source** needs a **Rust toolchain ≥ 1.88** ([rustup](https://rustup.rs)).
 
@@ -213,7 +213,7 @@ data:
     ids: { type: range, min: 1, max: 1000 }
   harvest:                           # seed pools from the live service first
     - request: { query: "query{ products{ id } }" }
-      extract: { ids: data.products[].id }
+      extract: { ids: "data.products[].id" }
 
 scenarios:                           # weighted mix, one drawn per request
   - name: GetProduct
@@ -223,7 +223,7 @@ scenarios:                           # weighted mix, one drawn per request
       variables: { id: "{{ids}}" }   # a whole-placeholder keeps its native type
 
 checks:
-  graphql_errors: true               # a 200 carrying `errors` counts as a failure
+  graphql_errors: true               # a 2xx/3xx carrying `errors` counts as a failure
 
 slos:                                # any violation → exit 1
   success_rate: 0.995
@@ -246,7 +246,7 @@ locally and in CI.
 `redliner-import` drafts a config from what the service already describes:
 one scenario per GraphQL Query field (via live introspection), or one per
 OpenAPI 3.x / Swagger 2.0 operation. It only writes YAML; it never fires load.
-From v0.5.1 it ships next to `redliner` in every release archive, the
+Since v0.5.1 it ships next to `redliner` in every release archive, the
 [install script](#install) and the Docker image
 (`docker run --entrypoint redliner-import <image> …`):
 
@@ -311,7 +311,9 @@ match counts without firing traffic. See
 ## Reports
 
 Each run writes `reports/<UTC timestamp>/` (with `-1`, `-2`, … appended when
-another run already took that second) and refreshes a `latest` symlink:
+another run already took that second) and, on Linux and macOS, refreshes a
+`latest` symlink to it (Windows has no `latest`; use the timestamped
+directory):
 
 | file                  | contents |
 | --------------------- | -------- |
