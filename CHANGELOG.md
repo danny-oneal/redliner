@@ -46,6 +46,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `application/json`; a body example written as a JSON string is sent as
     that JSON, not as a string literal; a skipped operation's note names a
     parameter with no `in` instead of printing `None`.
+  - A failed request prints its cause (`Connection refused`, say), not only
+    "error sending request"; a GraphQL URL without `http://` or `https://`
+    says to add one. `--bearer-env ""` is rejected, `-o <directory>` says it
+    is a directory (with or without `--force`), and a spec URL written
+    `HTTP://…` is fetched instead of read as a file path.
 
 ## [0.5.1] - 2026-10-31
 

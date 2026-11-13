@@ -35,6 +35,9 @@ pub struct Summary {
 pub async fn run(cli: Cli, stdout: &mut impl std::io::Write) -> Result<Summary, ImportError> {
     let (mut d, common) = match cli.command {
         Command::Graphql(a) => {
+            if !is_http(&a.url) {
+                return Err(ImportError::NotHttp(scrub(&a.url, true)));
+            }
             let f = Fetcher::new(&fetch_opts(&a.common))?;
             let schema = graphql::fetch_schema(&f, &a.url).await?;
             let url = scrub(&a.url, false);
@@ -50,7 +53,7 @@ pub async fn run(cli: Cli, stdout: &mut impl std::io::Write) -> Result<Summary, 
             (d, a.common)
         }
         Command::Openapi(a) => {
-            let is_url = a.spec.starts_with("http://") || a.spec.starts_with("https://");
+            let is_url = is_http(&a.spec);
             let (text, spec_url) = if is_url {
                 // Only a fetched spec needs the fetcher (and so --bearer-env set).
                 let f = Fetcher::new(&fetch_opts(&a.common))?;
@@ -91,6 +94,9 @@ pub async fn run(cli: Cli, stdout: &mut impl std::io::Write) -> Result<Summary, 
 
     match &common.output {
         Some(path) => {
+            if path.is_dir() {
+                return Err(ImportError::OutputIsDir(path.clone()));
+            }
             if path.exists() && !common.force {
                 return Err(ImportError::OutputExists(path.clone()));
             }
@@ -121,6 +127,12 @@ fn scrub(url: &str, keep_query: bool) -> String {
     let s = u.to_string();
     // Url adds a trailing "/" to an empty path; keep the caller's form.
     if url.ends_with('/') { s } else { s.trim_end_matches('/').to_string() }
+}
+
+/// Whether `s` starts with `http://` or `https://`, in any case.
+fn is_http(s: &str) -> bool {
+    let scheme = s.split_once("://").map(|(scheme, _)| scheme.to_ascii_lowercase());
+    matches!(scheme.as_deref(), Some("http" | "https"))
 }
 
 fn fetch_opts(c: &CommonArgs) -> FetchOpts {
@@ -197,6 +209,30 @@ mod tests {
 
         assert!(Cli::try_parse_from(["redliner-import", "graphql", "http://h", "--max-depth", "0"]).is_err());
         assert!(Cli::try_parse_from(["redliner-import", "graphql", "http://h", "-H", "nocolon"]).is_err());
+        assert!(Cli::try_parse_from(["redliner-import", "openapi", "spec.yaml", "--bearer-env", ""]).is_err());
+    }
+
+    #[tokio::test]
+    async fn output_that_is_a_directory_is_an_error() {
+        let dir = std::env::temp_dir();
+        let spec = fixture("petstore3.yaml");
+        for force in [false, true] {
+            let mut args = vec!["openapi", spec.as_str(), "--base-url", "http://h", "-o", dir.to_str().unwrap()];
+            if force {
+                args.push("--force");
+            }
+            let (r, _) = run_args(&args).await;
+            assert!(matches!(&r, Err(ImportError::OutputIsDir(p)) if *p == dir), "{r:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_uppercase_scheme_is_a_url_not_a_file() {
+        let doc = r#"{"openapi":"3.0.0","servers":[{"url":"/v1"}],"paths":{"/ping":{"get":{"operationId":"ping"}}}}"#;
+        let m = spawn_mock(200, "application/json", doc.to_string()).await;
+        let (r, yaml) = run_args(&["openapi", &format!("{}/openapi.json", m.url.replace("http://", "HTTP://"))]).await;
+        r.unwrap();
+        assert_eq!(assert_contract(&yaml).target.url, format!("{}/v1", m.url));
     }
 
     #[tokio::test]

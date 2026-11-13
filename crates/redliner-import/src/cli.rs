@@ -62,7 +62,7 @@ pub struct CommonArgs {
     pub header: Vec<(String, String)>,
     /// Env var holding a bearer token for fetching the schema; the draft
     /// gets `auth.token_env` naming it, never the token.
-    #[arg(long)]
+    #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
     pub bearer_env: Option<String>,
     /// Accept invalid TLS certificates (also sets `insecure_tls` in the draft).
     #[arg(short = 'k', long)]

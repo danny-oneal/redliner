@@ -20,7 +20,18 @@ async fn main() {
             );
         }
         Err(e) => {
-            eprintln!("redliner-import: {e}");
+            // reqwest's message names only the URL; the cause is in its sources.
+            let mut msg = e.to_string();
+            let mut source = std::error::Error::source(&e);
+            while let Some(s) = source {
+                let text = s.to_string();
+                if !msg.contains(&text) {
+                    msg.push_str(": ");
+                    msg.push_str(&text);
+                }
+                source = s.source();
+            }
+            eprintln!("redliner-import: {msg}");
             std::process::exit(2);
         }
     }
