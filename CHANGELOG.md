@@ -109,6 +109,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first latencies of every phase.
 - The summary's `elapsed` and the JUnit `time` cover the measured run only;
   they included the unmeasured warmup.
+- A latency SLO is judged at the microsecond precision the summary shows.
+  It compared the histogram's bucket edge, a few hundred nanoseconds above
+  the real value, so a p50 of exactly 1ms failed `p50: 1ms` and printed as
+  `target <= 1ms observed 1ms`.
 - The warmup runs at 10% of the first phase's rate without rounding it down
   to whole requests per second (rate 15 warmed at 1 rps, not 1.5; rate 2.5 at
   1 rps, not 0.25).
