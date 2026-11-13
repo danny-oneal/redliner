@@ -30,6 +30,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of making the line malformed.
 - Replay: `speed: 0`, `copies: 0`, `--speed 0` and `--copies 0` are
   validation errors (exit `2`) instead of silently meaning `1`.
+- Replay: two scenarios with an identical `match` rule are a validation
+  error, even when the log has no entry they would both match.
 - Replay: a UTF-8 byte-order mark at the start of a JSONL log no longer makes
   the first line malformed (dropping its event).
 - Replay reads a JSONL log line by line instead of loading the whole file

@@ -393,7 +393,9 @@ scenarios:
 
 Each log entry must match **at most one** scenario. An entry that matches two
 or more is an error (exit `2`, naming the log line and both scenarios), so
-make rules disjoint. An entry matching none is unmatched (see
+make rules disjoint. Two scenarios with an identical rule (the same
+`operation`, or the same `method` and `path`) are rejected by validation
+without reading the log. An entry matching none is unmatched (see
 `replay.on_unmatched`). The scenario's `request` is what gets sent: the
 matched log entry contributes only the scenario choice and its timing.
 
