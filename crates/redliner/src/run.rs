@@ -1,6 +1,5 @@
 //! Run orchestration (Go `run()` in `main.go`).
 
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -8,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use tokio::sync::watch;
 
-use volley::{Attacker, AttackerConfig, ConstantPacer, Metrics, Pacer};
+use volley::{Attacker, AttackerConfig, ConstantPacer, Pacer};
 
 use crate::checks::Checker;
 use crate::cli::{Args, Command, ConfigSource, DEFAULT_CONFIG};
@@ -317,8 +316,7 @@ where
     if let Err(e) = print_summary(
         &mut std::io::stdout().lock(),
         interrupted,
-        collector.overall(),
-        collector.per_op(),
+        &collector,
         replay.as_ref().map(|r| &r.summary),
         &results,
         elapsed,
@@ -426,13 +424,13 @@ async fn attack_replay(
 fn print_summary(
     out: &mut impl Write,
     interrupted: bool,
-    m: &Metrics,
-    per_op: &BTreeMap<String, Metrics>,
+    c: &Collector,
     replay: Option<&ReplaySummary>,
     slos: &[SloResult],
     elapsed: Duration,
     report_dir: &Path,
 ) -> std::io::Result<()> {
+    let (m, per_op) = (c.overall(), c.per_op());
     writeln!(out)?;
     writeln!(out, "==== redliner summary ====")?;
     if interrupted {
@@ -512,9 +510,9 @@ mod tests {
     #[test]
     fn interrupted_summary_labels_each_line_once() {
         let mut out = Vec::new();
-        let m = Metrics::new();
-        print_summary(&mut out, true, &m, &BTreeMap::new(), None, &[], Duration::ZERO, Path::new("r"))
-            .unwrap();
+        let mut c = Collector::new(None).unwrap();
+        c.close();
+        print_summary(&mut out, true, &c, None, &[], Duration::ZERO, Path::new("r")).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("\nrun           : INTERRUPTED (partial results)\n"), "{text}");
         let status: Vec<&str> = text.lines().filter(|l| l.starts_with("status ")).collect();
