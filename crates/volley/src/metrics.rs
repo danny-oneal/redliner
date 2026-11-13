@@ -79,9 +79,10 @@ impl Metrics {
             latency_total: Duration::ZERO,
             lat_min: None,
             lat_max: Duration::ZERO,
-            // 1ns .. 1h, 3 significant digits.
-            hist: Histogram::new_with_bounds(1, 3_600_000_000_000, 3)
-                .expect("valid histogram bounds"),
+            // From 1ns, 3 significant digits, growing to fit as `record`s
+            // arrive. The sum of no histograms is hdrhistogram's one
+            // infallible constructor.
+            hist: std::iter::empty().sum(),
             error_set: BTreeSet::new(),
         }
     }
@@ -102,7 +103,9 @@ impl Metrics {
         *self.status_codes.entry(r.code).or_insert(0) += 1;
 
         let nanos = u64::try_from(r.latency.as_nanos()).unwrap_or(u64::MAX);
-        self.hist.saturating_record(nanos.max(1));
+        if self.hist.record(nanos.max(1)).is_err() {
+            self.hist.saturating_record(nanos.max(1));
+        }
         self.latency_total += r.latency;
         if self.lat_min.is_none_or(|m| r.latency < m) {
             self.lat_min = Some(r.latency);
