@@ -3,12 +3,12 @@
 
 use std::collections::BTreeMap;
 
-use http::HeaderMap;
+use http::{HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 
 use super::{extract_path, DataError, Pool, Pools};
 use crate::config::{Config, Protocol, RequestConfig, TargetConfig};
-use crate::encode::headers::base_headers;
+use crate::encode::headers::{base_headers, set};
 
 /// One-shot HTTP client that reuses the target's headers/auth so harvest
 /// requests look like real client traffic.
@@ -34,13 +34,22 @@ impl BootstrapClient {
     }
 
     pub async fn fetch(&self, proto: Protocol, rc: &RequestConfig) -> Result<Value, DataError> {
+        // Layered as the encoders do: the target's headers, the GraphQL
+        // content type, then the harvest request's own headers, sent as
+        // written (the pools are what the harvest is filling).
+        let mut headers = self.headers.clone();
+        if proto == Protocol::Graphql {
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+        }
+        for (k, v) in &rc.headers {
+            set(&mut headers, k, v)?;
+        }
         let req = match proto {
             Protocol::Graphql => {
                 let body = json!({"query": rc.query, "variables": rc.variables});
                 self.client
                     .post(&self.target.url)
-                    .headers(self.headers.clone())
-                    .header("content-type", "application/json")
+                    .headers(headers)
                     .body(body.to_string())
             }
             Protocol::Rest => {
@@ -52,16 +61,14 @@ impl BootstrapClient {
                 let method = reqwest::Method::from_bytes(method.as_bytes())
                     .map_err(|e| DataError::Http(e.to_string()))?;
                 let url = format!("{}{}", self.target.url.trim_end_matches('/'), rc.path);
-                let mut req = self
-                    .client
-                    .request(method, url)
-                    .headers(self.headers.clone());
+                let mut req = self.client.request(method, url);
                 if !rc.body.is_empty() {
-                    req = req
-                        .header("content-type", "application/json")
-                        .body(rc.body.clone());
+                    if !headers.contains_key("content-type") {
+                        headers.insert("content-type", HeaderValue::from_static("application/json"));
+                    }
+                    req = req.body(rc.body.clone());
                 }
-                req
+                req.headers(headers)
             }
         };
 

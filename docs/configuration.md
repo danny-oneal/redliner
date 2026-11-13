@@ -294,12 +294,13 @@ previous run (idempotency keys against a persistent store), leave `seed` at
 `0` (time-based) or pass a new `--seed`. `timestamp` reads the clock, so it is
 the one pool a seed can't reproduce.
 
-REST scenario `headers` take placeholders too, which is how an idempotency key
+Scenario `headers` take placeholders too, which is how an idempotency key
 or correlation ID gets a fresh value on every request. They render after the
-path and body, so adding one to a seeded config doesn't change the paths and
-bodies it sends. `target.headers` and `-H` are sent as written: they're shared
-by every request, including the harvest probe, which runs before the pools
-exist.
+path, body and variables, so adding one to a seeded config doesn't change the
+requests it sends otherwise. `target.headers` and `-H` are sent as written:
+they're shared by every request, including the harvest probe, which runs
+before the pools exist. A harvest request's own `headers` are sent as written
+too, on that probe only, over the target's.
 
 ### `data.harvest`
 
@@ -340,6 +341,7 @@ instead.
 | `query`     | string | inline GraphQL document (mutually exclusive with `query_file`) |
 | `query_file`| string | path to a `.graphql` document, resolved relative to the config |
 | `variables` | map    | `{{pool}}` placeholders are rendered per request |
+| `headers`   | map    | per-scenario, override the base headers for that scenario only; values may contain `{{pool}}` placeholders, rendered per request after the variables |
 
 ### `request` — REST
 

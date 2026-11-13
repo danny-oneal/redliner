@@ -3,7 +3,7 @@ use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_AL
 use rand_chacha::ChaCha8Rng;
 use volley::Target;
 
-use super::headers::base_headers;
+use super::headers::{base_headers, render_templates, scenario_headers, HeaderTemplate};
 use super::{EncodeError, Encoder};
 use crate::config::{Scenario, TargetConfig};
 use crate::data::{render_value, Pools};
@@ -15,18 +15,31 @@ const QUERY_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'.')
     .remove(b'~');
 
+struct GraphqlRoute {
+    name: String,
+    /// Headers with fixed values.
+    headers: HeaderMap,
+    /// Headers whose values hold `{{pool}}` placeholders, rendered per request.
+    templated: Vec<HeaderTemplate>,
+}
+
 pub struct GraphqlEncoder {
     endpoint: String,
-    headers: HeaderMap,
+    routes: Vec<GraphqlRoute>,
 }
 
 impl GraphqlEncoder {
-    pub fn new(cfg: &TargetConfig) -> Result<Self, EncodeError> {
-        let mut headers = base_headers(cfg)?;
-        headers.insert("content-type", HeaderValue::from_static("application/json"));
+    pub fn new(cfg: &TargetConfig, scenarios: &[Scenario]) -> Result<Self, EncodeError> {
+        let mut base = base_headers(cfg)?;
+        base.insert("content-type", HeaderValue::from_static("application/json"));
+        let mut routes = Vec::with_capacity(scenarios.len());
+        for sc in scenarios {
+            let (headers, templated) = scenario_headers(&base, &sc.request.headers)?;
+            routes.push(GraphqlRoute { name: sc.name.clone(), headers, templated });
+        }
         Ok(Self {
             endpoint: cfg.url.clone(),
-            headers,
+            routes,
         })
     }
 
@@ -37,6 +50,11 @@ impl GraphqlEncoder {
         pools: &Pools,
         rng: &mut ChaCha8Rng,
     ) -> Result<(), EncodeError> {
+        let route = self
+            .routes
+            .iter()
+            .find(|r| r.name == sc.name)
+            .ok_or_else(|| EncodeError::InvalidHeader(format!("unknown scenario {}", sc.name)))?;
         let variables = render_value(
             &serde_json::Value::Object(sc.request.variables.clone().into_iter().collect()),
             pools,
@@ -52,8 +70,10 @@ impl GraphqlEncoder {
         // The op param is a correlation tag so per-operation metrics can be split out.
         t.url = format!("{}?op={}", self.endpoint, query_escape(&sc.name));
         t.body = body;
-        t.header = self.headers.clone();
-        Ok(())
+        t.header = route.headers.clone();
+        // After the variables, as for REST, so adding a templated header to a
+        // seeded config leaves the variables it draws unchanged.
+        render_templates(&mut t.header, &route.templated, pools, rng)
     }
 
     /// Recovers the operation name from a URL produced by `encode`.
@@ -112,11 +132,49 @@ mod tests {
     }
 
     fn enc() -> GraphqlEncoder {
-        GraphqlEncoder::new(&TargetConfig {
-            url: "http://h/graphql".into(),
-            ..Default::default()
-        })
+        enc_for(&[scenario("GetProduct"), scenario("Get Product&x=1")])
+    }
+
+    fn enc_for(scenarios: &[Scenario]) -> GraphqlEncoder {
+        GraphqlEncoder::new(
+            &TargetConfig {
+                url: "http://h/graphql".into(),
+                ..Default::default()
+            },
+            scenarios,
+        )
         .unwrap()
+    }
+
+    #[test]
+    fn graphql_scenario_headers_layer_over_the_target_headers() {
+        let target = TargetConfig {
+            url: "http://h/graphql".into(),
+            headers: [("X-Env", "base"), ("X-Keep", "k")]
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .into(),
+            ..Default::default()
+        };
+        let mut sc = scenario("GetProduct");
+        sc.request.headers = [("X-Env", "scenario"), ("X-Id", "id-{{id}}")]
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .into();
+        let other = scenario("Other");
+        let e = GraphqlEncoder::new(&target, &[sc.clone(), other.clone()]).unwrap();
+        let mut pools = Pools::new();
+        pools.insert("id".into(), Pool::List(vec![serde_json::json!(5)]));
+        let mut t = Target::default();
+        e.encode(&mut t, &sc, &pools, &mut rng()).unwrap();
+        assert_eq!(t.header["x-env"], "scenario");
+        assert_eq!(t.header.get_all("x-env").iter().count(), 1);
+        assert_eq!(t.header["x-keep"], "k");
+        assert_eq!(t.header["x-id"], "id-5");
+        assert_eq!(t.header["content-type"], "application/json");
+        // Another scenario sees only the target's headers.
+        let mut t = Target::default();
+        e.encode(&mut t, &other, &pools, &mut rng()).unwrap();
+        assert_eq!(t.header["x-env"], "base");
+        assert!(t.header.get("x-id").is_none());
     }
 
     #[test]

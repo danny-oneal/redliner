@@ -354,6 +354,34 @@ async fn e2e_harvest_seeds_pool_and_attacks() {
     );
 }
 
+#[tokio::test]
+async fn e2e_graphql_scenario_and_harvest_headers_are_sent() {
+    let mock = spawn_mock_seeded(Some("{\"data\":{\"products\":[{\"id\":7}]}}")).await;
+    let dir = tempdir("gql-headers");
+    let p = dir.join("cfg.yaml");
+    std::fs::write(
+        &p,
+        format!(
+            "target:\n  url: {}\n  headers:\n    X-Target: t\n\
+             load:\n  profile: constant\n  rate: 50\n  duration: 500ms\n\
+             data:\n  harvest:\n    - request:\n        query: \"{{ products {{ id }} }}\"\n        headers:\n          X-Harvest: h\n      extract:\n        ids: data.products[].id\n\
+             scenarios:\n  - name: product\n    weight: 1\n    request:\n      query: \"query product($id: Int) {{ product(id: $id) {{ name }} }}\"\n      \
+             variables:\n        id: \"{{{{ids}}}}\"\n      headers:\n        X-Scenario: \"s-{{{{ids}}}}\"\n",
+            mock.url
+        ),
+    )
+    .unwrap();
+    assert_eq!(run(args(&p, &["--out", dir.to_str().unwrap()])).await, Exit::Ok);
+    let heads = mock.heads.lock().unwrap();
+    let has = |head: &str, line: &str| head.to_ascii_lowercase().lines().any(|l| l == line);
+    assert!(has(&heads[0], "x-harvest: h") && has(&heads[0], "x-target: t"), "{}", heads[0]);
+    assert!(heads.len() > 2, "saw {} requests", heads.len());
+    for head in &heads[1..] {
+        assert!(has(head, "x-scenario: s-7") && has(head, "x-target: t"), "{head}");
+        assert!(!has(head, "x-harvest: h"), "{head}");
+    }
+}
+
 /// Writes `log.jsonl` (ops a,b,a,b,a 150ms apart, plus one unmatched
 /// `health` event) and a replay config with scenarios `a` and `b`.
 /// Returns `(config path, log path)`.

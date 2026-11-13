@@ -1,8 +1,8 @@
-use http::{HeaderMap, HeaderName, HeaderValue, Method};
+use http::{HeaderMap, HeaderValue, Method};
 use rand_chacha::ChaCha8Rng;
 use volley::Target;
 
-use super::headers::base_headers;
+use super::headers::{base_headers, render_templates, scenario_headers, HeaderTemplate};
 use super::{EncodeError, Encoder};
 use crate::config::{Scenario, TargetConfig};
 use crate::data::{render_string, Pools};
@@ -17,13 +17,6 @@ struct RestRoute {
     pattern: regex::Regex,
 }
 
-struct HeaderTemplate {
-    name: HeaderName,
-    /// The key as written in the config, for error messages.
-    key: String,
-    value: String,
-}
-
 pub struct RestEncoder {
     base_url: String,
     routes: Vec<RestRoute>,
@@ -36,21 +29,7 @@ impl RestEncoder {
         let mut routes = Vec::with_capacity(scenarios.len());
         for sc in scenarios {
             let r = &sc.request;
-            // Per-route clone so scenario headers never leak into the base or other routes.
-            let mut headers = base.clone();
-            let mut templated = Vec::new();
-            for (k, v) in &r.headers {
-                let n = HeaderName::from_bytes(k.as_bytes())
-                    .map_err(|e| EncodeError::InvalidHeader(format!("{k}: {e}")))?;
-                // Checked even when templated, so a bad character fails at startup.
-                let hv = HeaderValue::from_str(v)
-                    .map_err(|e| EncodeError::InvalidHeader(format!("{k}: {e}")))?;
-                if v.contains("{{") {
-                    templated.push(HeaderTemplate { name: n, key: k.clone(), value: v.clone() });
-                } else {
-                    headers.insert(n, hv);
-                }
-            }
+            let (mut headers, templated) = scenario_headers(&base, &r.headers)?;
             if !r.body.is_empty() && !headers.contains_key("content-type") {
                 headers.insert("content-type", HeaderValue::from_static("application/json"));
             }
@@ -92,13 +71,7 @@ impl Encoder for RestEncoder {
         }
         // After the path and body, so adding a templated header to a seeded
         // config leaves the paths and bodies it draws unchanged.
-        for h in &route.templated {
-            let v = render_string(&h.value, pools, rng)?;
-            let v = HeaderValue::from_str(&v)
-                .map_err(|e| EncodeError::InvalidHeader(format!("{}: {e}", h.key)))?;
-            t.header.insert(h.name.clone(), v);
-        }
-        Ok(())
+        render_templates(&mut t.header, &route.templated, pools, rng)
     }
 
     fn operation(&self, method: &str, url: &str) -> Option<String> {

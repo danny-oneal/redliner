@@ -157,10 +157,14 @@ mod tests {
     }
 
     fn targeter(sched: Arc<Schedule>, seed: u64) -> ScheduleTargeter {
-        let enc = GraphqlEncoder::new(&TargetConfig {
-            url: "http://h/graphql".into(),
-            ..Default::default()
-        })
+        let scenarios = vec![scenario("A", "{{ids}}"), scenario("B", "{{ids}}")];
+        let enc = GraphqlEncoder::new(
+            &TargetConfig {
+                url: "http://h/graphql".into(),
+                ..Default::default()
+            },
+            &scenarios,
+        )
         .unwrap();
         let pools: Pools = [(
             "ids".to_string(),
@@ -172,7 +176,7 @@ mod tests {
         .into();
         ScheduleTargeter::new(
             Box::new(enc),
-            vec![scenario("A", "{{ids}}"), scenario("B", "{{ids}}")],
+            scenarios,
             pools,
             sched,
             seed,

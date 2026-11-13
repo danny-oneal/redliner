@@ -48,7 +48,7 @@ pub trait Encoder: Send + Sync {
 /// Builds the encoder selected by `target.protocol`.
 pub fn new_encoder(cfg: &Config) -> Result<Box<dyn Encoder>, EncodeError> {
     Ok(match cfg.target.protocol {
-        Protocol::Graphql => Box::new(GraphqlEncoder::new(&cfg.target)?),
+        Protocol::Graphql => Box::new(GraphqlEncoder::new(&cfg.target, &cfg.scenarios)?),
         Protocol::Rest => Box::new(RestEncoder::new(&cfg.target, &cfg.scenarios)?),
     })
 }
@@ -116,7 +116,7 @@ mod tests {
         };
         let mk = || {
             MixTargeter::new(
-                Box::new(GraphqlEncoder::new(&cfg).unwrap()),
+                Box::new(GraphqlEncoder::new(&cfg, &[sc("A", 1.0), sc("B", 1.0)]).unwrap()),
                 WeightedMix::new(vec![sc("A", 1.0), sc("B", 1.0)]),
                 crate::data::Pools::new(),
                 7,
