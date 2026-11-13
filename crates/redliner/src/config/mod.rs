@@ -638,12 +638,10 @@ impl Config {
                             s.name
                         ));
                     }
-                    check_value_refs(
-                        &format!("{ctx}: request.variables"),
-                        &serde_json::Value::Object(s.request.variables.clone().into_iter().collect()),
-                        &pools,
-                        &mut errs,
-                    );
+                    let vars = format!("{ctx}: request.variables");
+                    for v in s.request.variables.values() {
+                        check_value_refs(&vars, v, &pools, &mut errs);
+                    }
                 }
                 Protocol::Rest => {
                     if s.request.path.is_empty() {
@@ -822,7 +820,8 @@ fn check_rest_request(ctx: &str, rc: &RequestConfig, errs: &mut Vec<String>) {
     if !rc.path.is_empty() && !rc.path.starts_with('/') {
         errs.push(format!("{ctx}: request.path must start with /"));
     }
-    if !rc.method.is_empty() && http::Method::from_bytes(rc.method.to_ascii_uppercase().as_bytes()).is_err() {
+    let method = rc.method.to_ascii_uppercase();
+    if !method.is_empty() && http::Method::from_bytes(method.as_bytes()).is_err() {
         errs.push(format!(
             "{ctx}: request.method {:?} is not a valid HTTP method",
             rc.method
@@ -856,8 +855,12 @@ fn check_value_refs(
 ) {
     match v {
         serde_json::Value::String(s) => check_refs(ctx, s, pools, errs),
-        serde_json::Value::Array(a) => a.iter().for_each(|v| check_value_refs(ctx, v, pools, errs)),
-        serde_json::Value::Object(m) => m.values().for_each(|v| check_value_refs(ctx, v, pools, errs)),
+        serde_json::Value::Array(a) => {
+            a.iter().for_each(|v| check_value_refs(ctx, v, pools, errs))
+        }
+        serde_json::Value::Object(m) => {
+            m.values().for_each(|v| check_value_refs(ctx, v, pools, errs))
+        }
         _ => {}
     }
 }
