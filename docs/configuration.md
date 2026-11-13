@@ -408,7 +408,7 @@ genuine transport error is never masked.
 | key              | type       | default | notes |
 | ---------------- | ---------- | ------- | ----- |
 | `status`         | list[int]  | `[]`    | allowed HTTP statuses; empty means the default 2xx/3xx |
-| `graphql_errors` | bool       | `true` for GraphQL, `false` for REST | a `200` carrying a non-empty top-level `errors` array counts as a failure |
+| `graphql_errors` | bool       | `true` for GraphQL, `false` for REST | a 2xx/3xx response carrying a non-empty top-level `errors` array counts as a failure |
 
 ## `slos`
 

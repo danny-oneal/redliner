@@ -223,7 +223,7 @@ scenarios:                           # weighted mix, one drawn per request
       variables: { id: "{{ids}}" }   # a whole-placeholder keeps its native type
 
 checks:
-  graphql_errors: true               # a 200 carrying `errors` counts as a failure
+  graphql_errors: true               # a 2xx/3xx carrying `errors` counts as a failure
 
 slos:                                # any violation → exit 1
   success_rate: 0.995
