@@ -107,6 +107,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     says to add one. `--bearer-env ""` is rejected, `-o <directory>` says it
     is a directory (with or without `--force`), and a spec URL written
     `HTTP://…` is fetched instead of read as a file path.
+  - A spec whose operations share one `operationId` (5000 of them, say)
+    drafts in under a second instead of minutes.
 
 ## [0.5.1] - 2026-10-31
 

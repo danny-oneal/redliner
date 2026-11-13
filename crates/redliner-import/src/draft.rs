@@ -31,6 +31,8 @@ pub struct Draft {
     pub scenarios: Vec<ScenarioDraft>,
     /// Skipped operations and hints, written as a closing comment.
     pub notes: Vec<String>,
+    /// For each taken scenario name, the next suffix [`Draft::scenario_name`] tries.
+    next_suffix: BTreeMap<String, u64>,
 }
 
 /// A list pool; `todo` names the expected type when `values` are placeholders.
@@ -67,6 +69,7 @@ impl Draft {
             pools: BTreeMap::new(),
             scenarios: Vec::new(),
             notes: Vec::new(),
+            next_suffix: BTreeMap::new(),
         }
     }
 
@@ -83,8 +86,21 @@ impl Draft {
     }
 
     /// `base` if no scenario has it yet, else `base_2`, `base_3`, …
-    pub fn scenario_name(&self, base: &str) -> String {
-        unique(base, |n| self.scenarios.iter().any(|s| s.name == n))
+    pub fn scenario_name(&mut self, base: &str) -> String {
+        let taken = |n: &str| self.scenarios.iter().any(|s| s.name == n);
+        if !taken(base) {
+            return base.to_string();
+        }
+        // Scenarios are never removed, so a suffix once taken stays taken:
+        // carry on from where the last search for `base` stopped.
+        let next = self.next_suffix.entry(base.to_string()).or_insert(2);
+        loop {
+            let name = format!("{base}_{next}");
+            *next += 1;
+            if !taken(&name) {
+                return name;
+            }
+        }
     }
 }
 
@@ -419,6 +435,22 @@ mod tests {
         d.scenarios.push(rest_scenario("x", None));
         assert_eq!(d.scenario_name("x"), "x_2");
         assert_eq!(d.scenario_name("y"), "y");
+    }
+
+    #[test]
+    fn many_scenarios_sharing_a_name_stay_fast() {
+        // Each name used to rescan every suffix from _2: cubic in the count.
+        let start = std::time::Instant::now();
+        let mut d = Draft::new("t", "http://h", Protocol::Rest);
+        d.scenarios.push(rest_scenario("op_3", None));
+        for _ in 0..2000 {
+            let name = d.scenario_name("op");
+            d.scenarios.push(rest_scenario(&name, None));
+        }
+        let names: Vec<&str> = d.scenarios.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names[..4], ["op_3", "op", "op_2", "op_4"]);
+        assert_eq!(names[2000], "op_2001");
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
     }
 
     #[test]
