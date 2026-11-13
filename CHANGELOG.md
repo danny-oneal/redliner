@@ -34,6 +34,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - A spec file that starts with a UTF-8 byte-order mark (PowerShell 5's
     `Out-File`, older Notepad) loads instead of failing with "more than one
     document".
+  - An operation or path item with its own `servers` gets a note naming the
+    server, instead of silently firing at `target.url`.
 
 ## [0.5.1] - 2026-10-31
 

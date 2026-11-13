@@ -73,6 +73,15 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
                 .filter(|id| !id.trim().is_empty())
                 .map_or_else(|| format!("{upper} {path}"), String::from);
             let name = d.scenario_name(&base);
+            let own_server = [op, item]
+                .iter()
+                .find_map(|v| v.get("servers")?.get(0)?.get("url")?.as_str());
+            if let Some(url) = own_server {
+                d.notes.push(format!(
+                    "{name}: the spec gives it its own server ({}); the draft sends it to target.url",
+                    crate::scrub(url, false)
+                ));
+            }
 
             let (mut path_pools, mut query, mut headers) = (Vec::new(), Vec::new(), Vec::new());
             for p in ps {
@@ -392,6 +401,25 @@ mod tests {
         assert!(msg.contains("2 skipped"), "{msg}");
         assert!(msg.contains("/pets: skipped — its path item uses an external $ref (paths/pets.yaml)"), "{msg}");
         assert!(msg.contains("bundle"), "{msg}");
+    }
+
+    #[test]
+    fn path_and_operation_servers_are_noted() {
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "https://api.example.com/v1"}], "paths": {
+            "/pets": {"get": {"operationId": "findPets"}},
+            "/files": {"servers": [{"url": "https://u:p@files.example.com?k=s"}], "get": {"operationId": "listFiles"}},
+            "/search": {"servers": [{"url": "https://x.example.com"}], "get": {
+                "operationId": "search", "servers": [{"url": "/search-api"}]
+            }}
+        }});
+        let d = draft(&doc, &opts(false)).unwrap();
+        assert_eq!(
+            d.notes,
+            [
+                "listFiles: the spec gives it its own server (https://files.example.com); the draft sends it to target.url",
+                "search: the spec gives it its own server (/search-api); the draft sends it to target.url",
+            ]
+        );
     }
 
     #[test]
