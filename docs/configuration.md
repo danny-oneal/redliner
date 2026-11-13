@@ -79,7 +79,7 @@ auth:
 | `steps`    | list     | —         | `[{ rate, duration }, ...]` for `profile: steps` |
 | `workers`  | int      | `10`      | initial concurrency (informational) |
 | `max_workers` | int   | `100000`  | hard cap on in-flight requests |
-| `seed`     | int      | `0`       | `0` derives a seed from the wall clock and records it; a fixed value reproduces pacing and sampling exactly |
+| `seed`     | int      | `0`       | `0` derives a seed from the wall clock and records it; a fixed value reproduces pacing and sampling exactly: each hit draws its scenario and pool values from its own stream, so worker concurrency can't reorder them (a `sequence` pool hands out the same numbers, though not always to the same hits) |
 
 Rates must be finite. `constant` and each `steps` entry must also satisfy
 `rate × duration > 1`: they fire their first hit at `1/rate`, and a hit due

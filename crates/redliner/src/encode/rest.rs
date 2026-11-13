@@ -14,7 +14,6 @@ struct RestRoute {
     headers: HeaderMap,
     /// Headers whose values hold `{{pool}}` placeholders, rendered per request.
     templated: Vec<HeaderTemplate>,
-    pattern: regex::Regex,
 }
 
 pub struct RestEncoder {
@@ -38,7 +37,6 @@ impl RestEncoder {
                 method: r.method.to_ascii_uppercase(),
                 headers,
                 templated,
-                pattern: path_pattern(&base_url, &r.path),
             });
         }
         Ok(Self { base_url, routes })
@@ -73,33 +71,6 @@ impl Encoder for RestEncoder {
         // config leaves the paths and bodies it draws unchanged.
         render_templates(&mut t.header, &route.templated, pools, rng)
     }
-
-    fn operation(&self, method: &str, url: &str) -> Option<String> {
-        self.routes
-            .iter()
-            .find(|r| r.method == method && r.pattern.is_match(url))
-            .map(|r| r.name.clone())
-    }
-}
-
-/// Anchored regex for `base+path` where each `{{...}}` placeholder matches one URL segment value.
-fn path_pattern(base: &str, path: &str) -> regex::Regex {
-    let mut pat = String::from("^");
-    let mut rest = format!("{base}{path}");
-    while let Some(i) = rest.find("{{") {
-        pat.push_str(&regex::escape(&rest[..i]));
-        pat.push_str("[^/?&]+");
-        match rest[i..].find("}}") {
-            Some(j) => rest = rest[i + j + 2..].to_string(),
-            None => {
-                rest.clear();
-                break;
-            }
-        }
-    }
-    pat.push_str(&regex::escape(&rest));
-    pat.push('$');
-    regex::Regex::new(&pat).expect("path pattern is a valid regex")
 }
 
 #[cfg(test)]
@@ -195,18 +166,6 @@ mod tests {
         let mut tb = Target::default();
         enc.encode(&mut tb, &b, &Pools::new(), &mut rng()).unwrap();
         assert_eq!(tb.header["accept"], "application/json");
-    }
-
-    #[test]
-    fn rest_operation_matches_by_pattern() {
-        let s = sc("GetProduct", "GET", "/products/{{id}}", "", &[]);
-        let enc = RestEncoder::new(&target("http://h"), &[s]).unwrap();
-        assert_eq!(
-            enc.operation("GET", "http://h/products/42"),
-            Some("GetProduct".to_string())
-        );
-        assert_eq!(enc.operation("POST", "http://h/products/42"), None);
-        assert_eq!(enc.operation("GET", "http://h/orders/1"), None);
     }
 
     #[test]

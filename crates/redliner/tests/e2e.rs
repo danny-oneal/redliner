@@ -382,6 +382,39 @@ async fn e2e_graphql_scenario_and_harvest_headers_are_sent() {
     }
 }
 
+/// Values with `/`, `&`, `=` and a space in a REST path and query.
+fn write_awkward_values_cfg(dir: &std::path::Path, base: &str) -> std::path::PathBuf {
+    let p = dir.join("cfg.yaml");
+    std::fs::write(
+        &p,
+        format!(
+            "target:\n  url: {base}\n  protocol: rest\nload:\n  profile: constant\n  rate: 50\n  duration: 1s\n\
+             data:\n  pools:\n    skus: {{ type: list, values: [\"hot latte\", \"a&b=c\", \"x/y\"] }}\n\
+             scenarios:\n  - name: search\n    weight: 1\n    request:\n      path: \"/products?sku={{{{skus}}}}\"\n\
+             \x20 - name: get\n    weight: 1\n    request:\n      path: \"/products/{{{{skus}}}}\"\n"
+        ),
+    )
+    .unwrap();
+    p
+}
+
+#[tokio::test]
+async fn e2e_rest_hits_are_attributed_whatever_their_values() {
+    let mock = spawn_mock().await;
+    let dir = tempdir("awkward-attribution");
+    let cfg = write_awkward_values_cfg(&dir, &origin(&mock));
+    assert_eq!(run(args(&cfg, &["--out", dir.to_str().unwrap(), "--live-stats", "0s"])).await, Exit::Ok);
+    let report = newest_report(&dir);
+    let total = read_metrics(&dir)["requests"].as_u64().unwrap();
+    let per_op: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report.join("per_operation.json")).unwrap()).unwrap();
+    let ops = per_op.as_array().unwrap();
+    let names: Vec<&str> = ops.iter().map(|o| o["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["get", "search"], "{per_op:#}");
+    let attributed: u64 = ops.iter().map(|o| o["requests"].as_u64().unwrap()).sum();
+    assert_eq!(attributed, total, "{per_op:#}");
+}
+
 /// Writes `log.jsonl` (ops a,b,a,b,a 150ms apart, plus one unmatched
 /// `health` event) and a replay config with scenarios `a` and `b`.
 /// Returns `(config path, log path)`.

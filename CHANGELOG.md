@@ -26,6 +26,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   defines an operation by that name. It was always sent, so spec-compliant
   servers rejected every anonymous query (the README's own example) with
   `Unknown operation named ...`.
+- A fixed `load.seed` now reproduces which scenario and pool values each hit
+  sends in a profile run. All workers shared one random stream, so the draw
+  order followed task scheduling; each hit now draws from its own stream, as
+  replay hits already did. A seeded run sends different values than the same
+  seed did before.
+- Per-operation reports count every REST hit. Hits were matched back to their
+  scenario from the URL, which lost any hit whose sampled value held `/`, `&`
+  or `?`; they are now attributed by the scenario that built them.
 
 ## [0.5.1] - 2026-10-31
 

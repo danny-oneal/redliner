@@ -1,5 +1,5 @@
 use http::{HeaderMap, HeaderValue, Method};
-use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use rand_chacha::ChaCha8Rng;
 use volley::Target;
 
@@ -87,13 +87,6 @@ impl GraphqlEncoder {
         // seeded config leaves the variables it draws unchanged.
         render_templates(&mut t.header, &route.templated, pools, rng)
     }
-
-    /// Recovers the operation name from a URL produced by `encode`.
-    pub fn operation(&self, url: &str) -> Option<String> {
-        let i = url.find("?op=")?;
-        let raw = url[i + 4..].replace('+', " ");
-        Some(percent_decode_str(&raw).decode_utf8_lossy().into_owned())
-    }
 }
 
 impl Encoder for GraphqlEncoder {
@@ -105,10 +98,6 @@ impl Encoder for GraphqlEncoder {
         rng: &mut ChaCha8Rng,
     ) -> Result<(), EncodeError> {
         GraphqlEncoder::encode(self, t, sc, pools, rng)
-    }
-
-    fn operation(&self, _method: &str, url: &str) -> Option<String> {
-        GraphqlEncoder::operation(self, url)
     }
 }
 
@@ -308,16 +297,14 @@ mod tests {
         assert_eq!(v["operationName"], "GetProduct");
         assert_eq!(v["query"], "query GetProduct { p { id } }");
         assert_eq!(v["variables"]["id"], 5);
-        assert_eq!(Encoder::operation(&e, "POST", &t.url).as_deref(), Some("GetProduct"));
     }
 
     #[test]
-    fn operation_round_trips_escaped_names() {
+    fn op_tag_escapes_the_scenario_name() {
         let e = enc();
         let mut t = Target::default();
         e.encode(&mut t, &scenario("Get Product&x=1"), &Pools::new(), &mut rng()).unwrap();
-        assert_eq!(Encoder::operation(&e, "POST", &t.url).as_deref(), Some("Get Product&x=1"));
-        assert_eq!(Encoder::operation(&e, "POST", "http://h/graphql"), None);
+        assert_eq!(t.url, "http://h/graphql?op=Get+Product%26x%3D1");
     }
 
     #[test]
