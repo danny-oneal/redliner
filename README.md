@@ -213,7 +213,7 @@ data:
     ids: { type: range, min: 1, max: 1000 }
   harvest:                           # seed pools from the live service first
     - request: { query: "query{ products{ id } }" }
-      extract: { ids: data.products[].id }
+      extract: { ids: "data.products[].id" }
 
 scenarios:                           # weighted mix, one drawn per request
   - name: GetProduct
