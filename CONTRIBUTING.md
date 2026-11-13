@@ -100,6 +100,12 @@ the workflow, the release scripts, a `Cargo.toml` or `Cargo.lock` runs the
 same builds without publishing. `make test-install` and `make test-release`
 test the scripts locally.
 
+If the publish step fails after it created the release (an asset upload
+failed, say), the tag `vX.Y.Z` now exists, so a re-run sees the version as
+released and builds nothing. Delete the release and its tag
+(`gh release delete vX.Y.Z --cleanup-tag`), then re-run all jobs of the
+merge's Release workflow run.
+
 The crates go to crates.io, engine first: `cargo publish -p redliner-volley`,
 then `cargo publish -p redliner`, then `cargo publish -p redliner-import`
 (which depends on neither). The engine's package name is
