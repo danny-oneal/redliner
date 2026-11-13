@@ -179,7 +179,7 @@ mod tests {
         let doc = json!({"items": 5});
         let err = apply_extract(&doc, &extract("skus", "items[].sku"), &mut pools).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            format!("{:#}", anyhow::Error::from(err)),
             "pool \"skus\": path \"items[].sku\": segment \"items[]\": expected array, got number"
         );
     }
