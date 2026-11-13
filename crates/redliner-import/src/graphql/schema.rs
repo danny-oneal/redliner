@@ -45,6 +45,15 @@ pub struct Field {
 pub struct Arg {
     pub name: String,
     pub ty: TypeRef,
+    /// Whether the argument declares a `defaultValue`.
+    pub has_default: bool,
+}
+
+impl Arg {
+    /// Whether a call must pass it: non-null with no default.
+    pub fn is_required(&self) -> bool {
+        self.ty.is_required() && !self.has_default
+    }
 }
 
 /// A type reference: a named type wrapped in lists and non-nulls.
@@ -118,7 +127,7 @@ pub fn parse(response: &Value) -> Result<Schema, ImportError> {
             other => return Err(ImportError::Shape(format!("type {name}: unknown kind {other:?}"))),
         };
         let fields = match t.get("fields").and_then(Value::as_array) {
-            Some(fs) => fs.iter().map(field).collect::<Result<Vec<_>, _>>()?,
+            Some(fs) => fs.iter().map(|f| field(&name, f)).collect::<Result<Vec<_>, _>>()?,
             None => Vec::new(),
         };
         let enum_values = t
@@ -147,25 +156,35 @@ fn text(v: &Value, key: &str) -> Result<String, ImportError> {
         .ok_or_else(|| ImportError::Shape(format!("missing {key} in {v}")))
 }
 
-fn field(v: &Value) -> Result<Field, ImportError> {
+/// A field of type `owner`.
+fn field(owner: &str, v: &Value) -> Result<Field, ImportError> {
+    let name = text(v, "name")?;
+    let at = format!("{owner}.{name}");
     let args = match v.get("args").and_then(Value::as_array) {
         Some(args) => args
             .iter()
-            .map(|a| Ok(Arg { name: text(a, "name")?, ty: type_ref(&a["type"])? }))
+            .map(|a| {
+                let arg = text(a, "name")?;
+                let has_default = a.get("defaultValue").is_some_and(|d| !d.is_null());
+                Ok(Arg { ty: type_ref(&a["type"], &format!("{at}({arg})"))?, name: arg, has_default })
+            })
             .collect::<Result<Vec<_>, ImportError>>()?,
         None => Vec::new(),
     };
-    Ok(Field { name: text(v, "name")?, args, ty: type_ref(&v["type"])? })
+    Ok(Field { ty: type_ref(&v["type"], &at)?, name, args })
 }
 
-fn type_ref(v: &Value) -> Result<TypeRef, ImportError> {
+/// `at` names the field or argument whose type `v` is, for errors.
+fn type_ref(v: &Value, at: &str) -> Result<TypeRef, ImportError> {
     match v.get("kind").and_then(Value::as_str) {
         Some(kind @ ("NON_NULL" | "LIST")) => {
-            let inner = v
-                .get("ofType")
-                .filter(|t| !t.is_null())
-                .ok_or_else(|| ImportError::Shape(format!("{kind} type without ofType")))?;
-            let inner = Box::new(type_ref(inner)?);
+            // INTROSPECTION_QUERY reads 8 levels of wrappers; a deeper type is cut off.
+            let inner = v.get("ofType").filter(|t| !t.is_null()).ok_or_else(|| {
+                ImportError::Shape(format!(
+                    "{at}: {kind} type without ofType (more than 8 levels of lists and non-nulls?)"
+                ))
+            })?;
+            let inner = Box::new(type_ref(inner, at)?);
             Ok(if kind == "LIST" { TypeRef::List(inner) } else { TypeRef::NonNull(inner) })
         }
         _ => Ok(TypeRef::Named(text(v, "name")?)),
@@ -239,5 +258,36 @@ mod tests {
     #[test]
     fn missing_schema_is_a_shape_error() {
         assert!(matches!(parse(&json!({"data": {}})), Err(ImportError::Shape(_))));
+    }
+
+    #[test]
+    fn a_type_wrapped_deeper_than_the_query_reads_names_its_field() {
+        // `inner` in `levels` alternating LIST / NON_NULL wrappers.
+        fn wrap(inner: Value, levels: usize) -> Value {
+            (0..levels).fold(inner, |t, i| {
+                json!({"kind": if i % 2 == 0 { "LIST" } else { "NON_NULL" }, "name": null, "ofType": t})
+            })
+        }
+        let int = json!({"kind": "SCALAR", "name": "Int", "ofType": null});
+        // Past the query's depth the server returns a wrapper with no ofType.
+        let cut = json!({"kind": "LIST", "name": null});
+        let response = |field_type: Value, arg_type: Value| {
+            json!({"data": {"__schema": {"queryType": {"name": "Query"}, "types": [
+                {"kind": "OBJECT", "name": "Query", "fields": [
+                    {"name": "matrix", "args": [{"name": "depth", "type": arg_type}], "type": field_type}
+                ]},
+                {"kind": "SCALAR", "name": "Int"}
+            ]}}})
+        };
+
+        let levels = crate::graphql::INTROSPECTION_QUERY.matches("ofType").count();
+        assert_eq!(levels, 8);
+        let s = parse(&response(wrap(int.clone(), levels), int.clone())).unwrap();
+        assert_eq!(s.types["Query"].fields[0].ty.sdl(), "[[[[Int]!]!]!]!");
+
+        let e = parse(&response(wrap(cut.clone(), levels), int.clone())).unwrap_err().to_string();
+        assert!(e.contains("Query.matrix: LIST type without ofType (more than 8 "), "{e}");
+        let e = parse(&response(int, wrap(cut, levels))).unwrap_err().to_string();
+        assert!(e.contains("Query.matrix(depth): "), "{e}");
     }
 }

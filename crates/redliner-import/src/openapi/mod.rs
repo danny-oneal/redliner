@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::draft::{Draft, PoolDraft, Protocol, RequestDraft, ScenarioDraft};
 use crate::ImportError;
-use doc::{base_url, body_example, params, resolve, version, Location};
+use doc::{base_url, body_content_type, body_example, params, resolve, version, Location};
 
 /// Where the document came from and how much of it to make live.
 #[derive(Debug, Clone)]
@@ -73,6 +73,15 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
                 .filter(|id| !id.trim().is_empty())
                 .map_or_else(|| format!("{upper} {path}"), String::from);
             let name = d.scenario_name(&base);
+            let own_server = [op, item]
+                .iter()
+                .find_map(|v| v.get("servers")?.get(0)?.get("url")?.as_str());
+            if let Some(url) = own_server {
+                d.notes.push(format!(
+                    "{name}: the spec gives it its own server ({}); the draft sends it to target.url",
+                    crate::scrub(url, false)
+                ));
+            }
 
             let (mut path_pools, mut query, mut headers) = (Vec::new(), Vec::new(), Vec::new());
             for p in ps {
@@ -88,6 +97,15 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
                     && (p.name.eq_ignore_ascii_case("accept") || p.name.eq_ignore_ascii_case("content-type"))
                 {
                     continue; // OpenAPI: these header parameters SHALL be ignored
+                }
+                if p.location == Location::Header
+                    && reqwest::header::HeaderName::from_bytes(p.name.as_bytes()).is_err()
+                {
+                    d.notes.push(format!(
+                        "{name}: header parameter {:?} skipped: not a valid HTTP header name",
+                        p.name
+                    ));
+                    continue;
                 }
                 if p.location == Location::Header && p.name.eq_ignore_ascii_case("authorization") {
                     d.notes.push(format!(
@@ -107,17 +125,25 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
                     Location::Cookie => {}
                 }
             }
-            // A `{name}` the spec doesn't declare (or declares in another case)
-            // still needs a value, or the request goes out with a literal `{name}`.
+            // A `{name}` declared in another case uses that declaration's pool;
+            // one the spec doesn't declare still needs a value, or the request
+            // goes out with a literal `{name}`.
             for n in template_names(path) {
-                if !path_pools.iter().any(|(p, _)| p == n) {
-                    let todo = Some("path parameter the spec does not declare".to_string());
-                    let pool = d.add_pool(
-                        &format!("{name}_{n}"),
-                        PoolDraft { values: vec![Value::String("TODO".into())], todo },
-                    );
-                    path_pools.push((n.to_string(), format!("{{{{{pool}}}}}")));
+                if path_pools.iter().any(|(p, _)| p == n) {
+                    continue;
                 }
+                let placeholder = match path_pools.iter().find(|(p, _)| p.eq_ignore_ascii_case(n)) {
+                    Some((_, placeholder)) => placeholder.clone(),
+                    None => {
+                        let todo = Some("path parameter the spec does not declare".to_string());
+                        let pool = d.add_pool(
+                            &format!("{name}_{n}"),
+                            PoolDraft { values: vec![Value::String("TODO".into())], todo },
+                        );
+                        format!("{{{{{pool}}}}}")
+                    }
+                };
+                path_pools.push((n.to_string(), placeholder));
             }
             let mut url_path = fill_path(path, &path_pools);
             if !query.is_empty() {
@@ -125,7 +151,11 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
                 url_path.push_str(&query.join("&"));
             }
 
-            let body = matches!(method, "post" | "put" | "patch").then(|| match body_example(doc, ver, op) {
+            let has_body = matches!(method, "post" | "put" | "patch");
+            if let Some(media) = body_content_type(doc, ver, op).filter(|_| has_body) {
+                headers.push(("Content-Type".to_string(), media));
+            }
+            let body = has_body.then(|| match body_example(doc, ver, op).map(json_text_parsed) {
                 // redliner reads `{{` in a body as a placeholder (compact JSON
                 // has it only inside strings); a pool value is sent verbatim.
                 Some(v) if v.to_string().contains("{{") => {
@@ -177,6 +207,15 @@ pub fn draft(doc: &Value, opts: &OpenapiOpts) -> Result<Draft, ImportError> {
         }));
     }
     Ok(d)
+}
+
+/// A string example that holds a JSON object or array, parsed; any other
+/// value as is.
+fn json_text_parsed(v: Value) -> Value {
+    match v.as_str().and_then(|s| serde_json::from_str::<Value>(s).ok()) {
+        Some(parsed) if parsed.is_object() || parsed.is_array() => parsed,
+        _ => v,
+    }
 }
 
 /// `template` with each `{param}` that has a pool replaced by its
@@ -395,6 +434,90 @@ mod tests {
     }
 
     #[test]
+    fn a_path_parameter_declared_in_another_case_keeps_its_example() {
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {
+            "/pets/{petId}": {"get": {"operationId": "getPet", "parameters": [
+                {"name": "PetId", "in": "path", "required": true, "schema": {"example": 42}}
+            ]}}
+        }});
+        let d = draft(&doc, &opts(false)).unwrap();
+        assert_eq!(rest(&d, "getPet").0, "/pets/{{getPet_PetId}}");
+        assert_eq!(d.pools.keys().collect::<Vec<_>>(), ["getPet_PetId"]);
+        assert_eq!(pool(&d, "getPet_PetId"), (json!([42]), None));
+    }
+
+    #[test]
+    fn json_bodies_get_their_media_type_and_string_examples_are_parsed() {
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {
+            "/a": {"post": {"operationId": "a", "requestBody": {"content": {
+                "application/vnd.api+json": {"example": "{\"data\": {\"type\": \"pets\"}}"}}}}},
+            "/b": {"post": {"operationId": "b", "requestBody": {"content": {
+                "application/json": {"example": "plain text"}}}}}
+        }});
+        let d = draft(&doc, &opts(true)).unwrap();
+        let (_, headers, body) = rest(&d, "a");
+        assert_eq!(headers, [("Content-Type".to_string(), "application/vnd.api+json".to_string())]);
+        assert_eq!(body, Some("{\"data\":{\"type\":\"pets\"}}"));
+        // A string that isn't a JSON object or array is the example itself.
+        let (_, headers, body) = rest(&d, "b");
+        assert!(headers.is_empty());
+        assert_eq!(body, Some("\"plain text\""));
+        assert_contract(&render(&d));
+    }
+
+    #[test]
+    fn path_and_operation_servers_are_noted() {
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "https://api.example.com/v1"}], "paths": {
+            "/pets": {"get": {"operationId": "findPets"}},
+            "/files": {"servers": [{"url": "https://u:p@files.example.com?k=s"}], "get": {"operationId": "listFiles"}},
+            "/search": {"servers": [{"url": "https://x.example.com"}], "get": {
+                "operationId": "search", "servers": [{"url": "/search-api"}]
+            }}
+        }});
+        let d = draft(&doc, &opts(false)).unwrap();
+        assert_eq!(
+            d.notes,
+            [
+                "listFiles: the spec gives it its own server (https://files.example.com); the draft sends it to target.url",
+                "search: the spec gives it its own server (/search-api); the draft sends it to target.url",
+            ]
+        );
+    }
+
+    #[test]
+    fn array_and_object_parameter_examples_are_marked_todo() {
+        // Their wire form depends on the parameter's style; JSON text is not it.
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {"/a/{ids}": {"get": {
+            "operationId": "a", "parameters": [
+                {"name": "tags", "in": "query", "required": true, "example": ["red", "blue"]},
+                {"name": "filter", "in": "query", "required": true, "explode": false, "example": {"name": "x"}},
+                {"name": "ids", "in": "path", "required": true, "schema": {"example": [1, 2]}}
+            ]
+        }}}});
+        let d = draft(&doc, &opts(false)).unwrap();
+        assert_eq!(
+            pool(&d, "a_tags"),
+            (json!(["red"]), Some("array parameter (style: form, explode: true); only its first element is sent".into()))
+        );
+        assert_eq!(
+            pool(&d, "a_filter"),
+            (json!([{"name": "x"}]), Some("object parameter (style: form, explode: false); sent as JSON".into()))
+        );
+        assert_eq!(
+            pool(&d, "a_ids"),
+            (json!([1]), Some("array parameter (style: simple, explode: false); only its first element is sent".into()))
+        );
+        let sw2 = json!({"swagger": "2.0", "host": "h", "paths": {"/b": {"get": {"operationId": "b", "parameters": [
+            {"name": "tags", "in": "query", "required": true, "type": "array", "x-example": ["red", "blue"]}
+        ]}}}});
+        let d = draft(&sw2, &opts(false)).unwrap();
+        assert_eq!(
+            pool(&d, "b_tags"),
+            (json!(["red"]), Some("array parameter (collectionFormat: csv); only its first element is sent".into()))
+        );
+    }
+
+    #[test]
     fn accept_and_content_type_header_parameters_are_ignored() {
         // OpenAPI 3: header parameters named Accept or Content-Type SHALL be ignored.
         let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {"/a": {"get": {
@@ -408,5 +531,25 @@ mod tests {
         let names: Vec<&str> = rest(&d, "a").1.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(names, ["X-Trace"]);
         assert_eq!(d.pools.keys().collect::<Vec<_>>(), ["a_X_Trace"]);
+    }
+
+    #[test]
+    fn header_parameters_that_are_not_http_header_names_are_skipped() {
+        // redliner rejects such a header, so the draft would not load.
+        let doc = json!({"openapi": "3.0.0", "servers": [{"url": "http://h"}], "paths": {"/a": {"get": {
+            "operationId": "a", "parameters": [
+                {"name": "X Trace", "in": "header", "required": true, "schema": {"type": "string"}},
+                {"name": "X-Ok", "in": "header", "required": true, "schema": {"type": "string"}}
+            ]
+        }}}});
+        let d = draft(&doc, &opts(false)).unwrap();
+        let names: Vec<&str> = rest(&d, "a").1.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(names, ["X-Ok"]);
+        assert!(
+            d.notes.contains(&"a: header parameter \"X Trace\" skipped: not a valid HTTP header name".to_string()),
+            "{:?}",
+            d.notes
+        );
+        crate::testutil::assert_contract(&crate::draft::render(&d));
     }
 }

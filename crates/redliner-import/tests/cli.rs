@@ -38,3 +38,17 @@ fn binary_reports_errors_with_exit_2() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.starts_with("redliner-import: "), "{stderr}");
 }
+
+#[test]
+fn binary_prints_the_cause_of_a_failed_request() {
+    // Nothing listens on port 1; reqwest's own message names only the URL.
+    let out = bin().args(["graphql", "http://127.0.0.1:1/graphql"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.to_lowercase().contains("connection refused"), "{stderr}");
+
+    let out = bin().args(["graphql", "localhost:4000/graphql"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("add http:// or https://"), "{stderr}");
+}

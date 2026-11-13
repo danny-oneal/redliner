@@ -31,6 +31,8 @@ pub struct Draft {
     pub scenarios: Vec<ScenarioDraft>,
     /// Skipped operations and hints, written as a closing comment.
     pub notes: Vec<String>,
+    /// For each taken scenario name, the next suffix [`Draft::scenario_name`] tries.
+    next_suffix: BTreeMap<String, u64>,
 }
 
 /// A list pool; `todo` names the expected type when `values` are placeholders.
@@ -67,6 +69,7 @@ impl Draft {
             pools: BTreeMap::new(),
             scenarios: Vec::new(),
             notes: Vec::new(),
+            next_suffix: BTreeMap::new(),
         }
     }
 
@@ -83,8 +86,21 @@ impl Draft {
     }
 
     /// `base` if no scenario has it yet, else `base_2`, `base_3`, …
-    pub fn scenario_name(&self, base: &str) -> String {
-        unique(base, |n| self.scenarios.iter().any(|s| s.name == n))
+    pub fn scenario_name(&mut self, base: &str) -> String {
+        let taken = |n: &str| self.scenarios.iter().any(|s| s.name == n);
+        if !taken(base) {
+            return base.to_string();
+        }
+        // Scenarios are never removed, so a suffix once taken stays taken:
+        // carry on from where the last search for `base` stopped.
+        let next = self.next_suffix.entry(base.to_string()).or_insert(2);
+        loop {
+            let name = format!("{base}_{next}");
+            *next += 1;
+            if !taken(&name) {
+                return name;
+            }
+        }
     }
 }
 
@@ -115,19 +131,33 @@ pub fn sanitize_name(s: &str) -> String {
 
 /// A JSON string literal: also a valid YAML double-quoted scalar.
 fn q(s: &str) -> String {
-    // serde_json leaves NEL, U+2028 and U+2029 raw; YAML reads them as line
-    // breaks, which inside a commented-out block would end the comment.
-    Value::String(s.to_string())
-        .to_string()
-        .replace('\u{85}', "\\u0085")
-        .replace('\u{2028}', "\\u2028")
-        .replace('\u{2029}', "\\u2029")
+    yaml_safe(&Value::String(s.to_string()).to_string())
 }
 
-/// `s` with every control character and YAML line break made a space, so text
-/// from a spec or server can't end a comment or a block-scalar line.
+/// JSON text with the characters serde_json leaves raw but YAML can't carry
+/// escaped as `\uXXXX` (they only occur inside JSON strings, where that
+/// escape means the same character). YAML reads NEL, U+2028 and U+2029 as
+/// line breaks, which inside a commented-out block would end the comment, and
+/// rejects DEL, the other C1 controls and U+FFFE/U+FFFF outright.
+fn yaml_safe(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        match c {
+            '\u{7f}'..='\u{9f}' | '\u{2028}' | '\u{2029}' | '\u{fffe}' | '\u{ffff}' => {
+                out.push_str(&format!("\\u{:04x}", c as u32))
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// `s` with every control character, YAML line break and character YAML
+/// rejects made a space, so text from a spec or server can't end a comment
+/// or a block-scalar line, or stop the draft loading.
 fn one_line(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') { ' ' } else { c }).collect()
+    let blank = |c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{fffe}' | '\u{ffff}');
+    s.chars().map(|c| if blank(c) { ' ' } else { c }).collect()
 }
 
 /// Writes the draft as a commented config `redliner` loads unmodified.
@@ -160,7 +190,7 @@ pub fn render(d: &Draft) -> String {
     if !d.pools.is_empty() {
         o.push_str("\ndata:\n  pools:\n");
         for (name, p) in &d.pools {
-            let values = Value::Array(p.values.clone());
+            let values = yaml_safe(&Value::Array(p.values.clone()).to_string());
             o.push_str(&format!("    {}: {{type: list, values: {values}}}", q(name)));
             if let Some(t) = &p.todo {
                 o.push_str(&format!("  # TODO: real values ({})", one_line(t)));
@@ -408,6 +438,22 @@ mod tests {
     }
 
     #[test]
+    fn many_scenarios_sharing_a_name_stay_fast() {
+        // Each name used to rescan every suffix from _2: cubic in the count.
+        let start = std::time::Instant::now();
+        let mut d = Draft::new("t", "http://h", Protocol::Rest);
+        d.scenarios.push(rest_scenario("op_3", None));
+        for _ in 0..2000 {
+            let name = d.scenario_name("op");
+            d.scenarios.push(rest_scenario(&name, None));
+        }
+        let names: Vec<&str> = d.scenarios.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names[..4], ["op_3", "op", "op_2", "op_4"]);
+        assert_eq!(names[2000], "op_2001");
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
+    }
+
+    #[test]
     fn hostile_text_cannot_escape_comments_or_scalars() {
         // Text from a spec or server reaches comments, the query block and
         // scalars; no line break in it may start a live YAML line.
@@ -435,5 +481,42 @@ mod tests {
         assert_eq!(names, ["product"], "{yaml}");
         assert_eq!(cfg.data.pools.keys().collect::<Vec<_>>(), ["product_id"], "{yaml}");
         assert!(!cfg.scenarios[0].request.query.contains('\r'), "{yaml}");
+    }
+
+    #[test]
+    fn characters_yaml_forbids_survive_in_scalars_and_values() {
+        // libyaml rejects DEL, C1 controls and U+FFFE/U+FFFF anywhere in the
+        // stream; U+0092 is a Windows-1252 apostrophe mis-decoded.
+        let odd = "it\u{92}s \u{7f}\u{80}\u{9f}\u{fffe}\u{ffff}";
+        let mut d = Draft::new(format!("a {odd}"), "http://h", Protocol::Rest);
+        d.notes.push(odd.into());
+        d.header_names = vec![odd.into()];
+        let pool = d.add_pool("p", PoolDraft { values: vec![json!(odd), json!({ odd: [odd] })], todo: Some(odd.into()) });
+        d.scenarios.push(ScenarioDraft {
+            name: odd.into(),
+            request: RequestDraft::Rest {
+                method: "POST".into(),
+                path: format!("/a?q={{{{{pool}}}}}&r={odd}"),
+                // redliner rejects an invalid header name or value, so the
+                // header carries only a pool placeholder.
+                headers: vec![("X-Odd".into(), format!("{{{{{pool}}}}}"))],
+                body: Some(odd.into()),
+            },
+            commented: None,
+        });
+        d.scenarios.push(ScenarioDraft {
+            name: format!("{odd} 2"),
+            request: RequestDraft::Graphql { query: format!("query x {{\n  a # {odd}\n}}\n"), variables: vec![] },
+            commented: Some(odd.into()),
+        });
+
+        let yaml = render(&d);
+        let cfg = assert_contract(&yaml);
+        let r = &cfg.scenarios[0].request;
+        assert_eq!(cfg.scenarios[0].name, odd);
+        assert_eq!(r.path, format!("/a?q={{{{p}}}}&r={odd}"));
+        assert_eq!(r.headers["X-Odd"], "{{p}}");
+        assert_eq!(r.body, odd);
+        assert_eq!(cfg.data.pools["p"].values, [json!(odd), json!({ odd: [odd] })]);
     }
 }

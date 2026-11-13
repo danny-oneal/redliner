@@ -32,9 +32,7 @@ growing the load tester. The YAML config is the contract between them.
 
 Firing traffic; GraphQL mutations, subscriptions and fragments; synthesizing
 meaningful values or request bodies from JSON Schema (examples only); external
-`$ref`s; shipping the importer in release tarballs, `scripts/install.sh` or the
-Docker image (v1 installs with `cargo install --path crates/redliner-import`);
-other sources (gRPC reflection, Postman, HAR).
+`$ref`s; other sources (gRPC reflection, Postman, HAR).
 
 ## Decisions
 
@@ -91,8 +89,8 @@ writes `target.auth: {type: bearer, token_env: VAR}`.
 - One scenario per non-deprecated Query-root field, named after the field. Its
   query is a **named operation with the same name** (`query product($id: Int!)
   { ... }`), because the encoder sends `operationName` = scenario name.
-- Required arguments (outer `NON_NULL`) become variables bound to
-  `{{<field>_<arg>}}`; optional arguments are omitted.
+- Required arguments (outer `NON_NULL`, no `defaultValue`) become variables
+  bound to `{{<field>_<arg>}}`; optional arguments are omitted.
 - Selection set: scalar and enum fields; object, interface and union fields
   descend while depth allows (`--max-depth`, default 3, counting the root
   field's return type as level 1); never re-enter a type already on the path;
@@ -151,4 +149,6 @@ writes `target.auth: {type: bearer, token_env: VAR}`.
   manual merge.
 - OpenAPI paths come out in sorted order, not document order: `serde_json` maps
   sort their keys.
-- Not in the release artifacts yet; install with `cargo install`.
+- Since v0.5.1 it ships next to `redliner` in the release archives (x86_64
+  Linux musl and Apple Silicon macOS), `scripts/install.sh` and the Docker
+  image; on any other platform, install with `cargo install`.

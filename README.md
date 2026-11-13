@@ -265,14 +265,17 @@ The draft is a starting point to review, not a finished benchmark:
   own list pool, filled from the spec's `example`/`default`/`enum` where one
   exists; otherwise it
   holds a typed placeholder with a `# TODO: real values` comment. Replace
-  those (or fill them with `data.harvest`).
+  those (or fill them with `data.harvest`). An array or object example is
+  marked TODO too: the draft sends an array's first element (an object as
+  JSON), not the parameter's serialization `style`.
 - **Safe by default.** OpenAPI `POST`/`PUT`/`PATCH`/`DELETE` operations are
   written commented out; pass `--include-unsafe` to emit them live. GraphQL
   mutations are listed in the notes, not scaffolded.
 - **Secrets stay out of the file.** `-H "Name: value"` and `--bearer-env VAR`
   authenticate the schema fetch; the draft records only the header names (in a
   comment) and `auth.token_env: VAR`, never a value. A `user:password@` in a
-  URL, and the query of a spec URL, are left out too.
+  URL, and the query string of a spec URL or a GraphQL endpoint, are left out
+  too; put credentials in `target.headers` or `target.auth`.
 - **Defaults** are a constant 10 rps for 30s, with suggested SLOs commented
   out. `-k` accepts invalid certificates and sets `insecure_tls`. `-o` refuses
   to overwrite an existing file without `--force`. Errors exit `2`.

@@ -110,6 +110,49 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Replay reads a JSONL log line by line instead of loading the whole file
   first, so peak memory no longer includes a copy of the raw log (a 132 MB
   log: about 300 MB to 220 MB).
+- `redliner-import`:
+  - A spec URL's query string (a presigned token, say) is no longer written
+    into `target.url` when the spec's server URL is `""`, `"#"` or query-only.
+  - A GraphQL endpoint's query string (`?api_key=…`) is no longer written to
+    the draft's header comment or `target.url`; a note says to put
+    credentials in `target.headers` or `target.auth`.
+  - A spec value carrying DEL, a C1 control character (a mis-decoded
+    Windows-1252 apostrophe, U+0092, say) or U+FFFE/U+FFFF no longer produces
+    a draft that fails to load; such characters are written escaped.
+  - A parameter whose example is an array or object gets a TODO naming its
+    serialization style, and an array sends its first element, instead of
+    silently sending the example as JSON text (`?tags=["red","blue"]`).
+  - A spec file that starts with a UTF-8 byte-order mark (PowerShell 5's
+    `Out-File`, older Notepad) loads instead of failing with "more than one
+    document".
+  - An operation or path item with its own `servers` gets a note naming the
+    server, instead of silently firing at `target.url`.
+  - OpenAPI edge cases: a Swagger 2.0 `basePath` without a leading `/` no
+    longer runs into the host (`https://api.example.comapi`); an `example:
+    null` body falls through to the schema's example instead of sending
+    `null`; an OpenAPI 3.1 nullable type (`type: [integer, "null"]`) gets a
+    typed placeholder; a path parameter declared in another case (`PetId`
+    for `{petId}`) keeps its example instead of a TODO; a `+json` body
+    (`application/vnd.api+json`) gets that `Content-Type` instead of
+    `application/json`; a body example written as a JSON string is sent as
+    that JSON, not as a string literal; a skipped operation's note names a
+    parameter with no `in` instead of printing `None`.
+  - A failed request prints its cause (`Connection refused`, say), not only
+    "error sending request"; a GraphQL URL without `http://` or `https://`
+    says to add one. `--bearer-env ""` is rejected, `-o <directory>` says it
+    is a directory (with or without `--force`), and a spec URL written
+    `HTTP://…` is fetched instead of read as a file path.
+  - A spec whose operations share one `operationId` (5000 of them, say)
+    drafts in under a second instead of minutes.
+  - GraphQL: a type wrapped in 8 lists and non-nulls (`[[[[Int]!]!]!]!`)
+    is read (7 before), and a deeper one's error names its field
+    (`Query.matrix: LIST type without ofType …`) instead of naming nothing.
+  - GraphQL: a non-null argument with a default value is optional, as the
+    spec says: a root field's defaulted argument no longer gets a pool and a
+    variable, and a field with one is no longer left out of selections.
+  - An OpenAPI header parameter whose name is not a valid HTTP header name
+    (`X Trace`, say) is skipped with a note, instead of producing a draft
+    that `redliner --validate` rejects.
 - The `poisson` profile (the default) now fires a Poisson process. It used
   to track the mean rate within about one hit, a near-constant load with
   little of the burstiness that drives queueing and tail latency (per-second

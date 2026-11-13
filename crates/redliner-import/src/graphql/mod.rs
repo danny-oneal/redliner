@@ -12,7 +12,8 @@ use schema::{Field, Kind, Schema, TypeRef};
 use select::selection;
 
 /// Asks only for what the generator reads: root names, each type's kind,
-/// non-deprecated fields with their args and types, and enum values.
+/// non-deprecated fields with their args (and whether each has a default)
+/// and types, and enum values.
 pub const INTROSPECTION_QUERY: &str = "query RedlinerImport {
   __schema {
     queryType { name }
@@ -21,14 +22,15 @@ pub const INTROSPECTION_QUERY: &str = "query RedlinerImport {
     types {
       kind
       name
-      fields(includeDeprecated: false) { name args { name type { ...TypeRef } } type { ...TypeRef } }
+      fields(includeDeprecated: false) { name args { name defaultValue type { ...TypeRef } } type { ...TypeRef } }
       enumValues(includeDeprecated: false) { name }
     }
   }
 }
 fragment TypeRef on __Type {
   kind name ofType { kind name ofType { kind name ofType { kind name ofType {
-  kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } }
+  kind name ofType { kind name ofType { kind name ofType { kind name ofType {
+  kind name } } } } } } } }
 }
 ";
 
@@ -52,7 +54,7 @@ pub fn draft(schema: &Schema, url: &str, max_depth: usize) -> Result<Draft, Impo
     for f in &root.fields {
         let name = d.scenario_name(&f.name);
         let (mut variables, mut decls, mut args) = (Vec::new(), Vec::new(), Vec::new());
-        for a in f.args.iter().filter(|a| a.ty.is_required()) {
+        for a in f.args.iter().filter(|a| a.is_required()) {
             let pool = d.add_pool(
                 &format!("{}_{}", f.name, a.name),
                 PoolDraft { values: vec![placeholder(schema, &a.ty)], todo: Some(a.ty.sdl()) },
@@ -200,6 +202,30 @@ mod tests {
         let products = request(&d, "products").0;
         assert!(products.contains("$filter: ProductFilter!"), "{products}");
         assert!(!products.contains("first"), "{products}");
+    }
+
+    #[test]
+    fn non_null_args_with_a_default_are_optional() {
+        // `items(first: Int! = 10, id: ID!)` and `Item.name(format: String! = "short")`
+        // can be called without the defaulted argument.
+        assert!(INTROSPECTION_QUERY.contains("args { name defaultValue type"));
+        let ty = |kind: &str, name: &str| json!({"kind": kind, "name": name, "ofType": null});
+        let non_null = |name: &str| json!({"kind": "NON_NULL", "name": null, "ofType": ty("SCALAR", name)});
+        let response = json!({"data": {"__schema": {"queryType": {"name": "Query"}, "types": [
+            {"kind": "OBJECT", "name": "Query", "fields": [{"name": "items", "args": [
+                {"name": "first", "defaultValue": "10", "type": non_null("Int")},
+                {"name": "id", "defaultValue": null, "type": non_null("ID")}
+            ], "type": ty("OBJECT", "Item")}]},
+            {"kind": "OBJECT", "name": "Item", "fields": [
+                {"name": "name", "args": [{"name": "format", "defaultValue": "\"short\"", "type": non_null("String")}],
+                 "type": ty("SCALAR", "String")},
+                {"name": "secret", "args": [{"name": "key", "type": non_null("String")}], "type": ty("SCALAR", "String")}
+            ]},
+            {"kind": "SCALAR", "name": "Int"}, {"kind": "SCALAR", "name": "ID"}, {"kind": "SCALAR", "name": "String"}
+        ]}}});
+        let d = draft(&schema::parse(&response).unwrap(), URL, 3).unwrap();
+        assert_eq!(d.pools.keys().collect::<Vec<_>>(), ["items_id"]);
+        assert_eq!(request(&d, "items").0, "query items($id: ID!) {\n  items(id: $id) {\n    name\n  }\n}\n");
     }
 
     #[test]

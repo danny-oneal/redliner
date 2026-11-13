@@ -107,19 +107,19 @@ pub fn assert_contract(yaml: &str) -> redliner::config::Config {
     std::fs::write(&path, yaml).unwrap();
     let cfg = match redliner::config::load_config_file(&path) {
         Ok(c) => c,
-        Err(e) => panic!("draft does not load: {e}\n---\n{yaml}"),
+        Err(e) => panic!("draft does not load: {}\n---\n{yaml}", chain(&e)),
     };
     let _ = std::fs::remove_file(&path);
     let pools = match redliner::data::build_pools(&cfg.data) {
         Ok(p) => p,
-        Err(e) => panic!("pools do not build: {e}\n---\n{yaml}"),
+        Err(e) => panic!("pools do not build: {}\n---\n{yaml}", chain(&e)),
     };
     let mut rng = ChaCha8Rng::seed_from_u64(1);
     for s in &cfg.scenarios {
         let r = &s.request;
         let vars = Value::Object(r.variables.clone().into_iter().collect());
         if let Err(e) = redliner::data::render_value(&vars, &pools, &mut rng) {
-            panic!("scenario {:?}: variables do not render: {e}\n---\n{yaml}", s.name);
+            panic!("scenario {:?}: variables do not render: {}\n---\n{yaml}", s.name, chain(&e));
         }
         let mut strings = vec![("path", r.path.as_str())];
         if !r.body.is_empty() {
@@ -130,9 +130,33 @@ pub fn assert_contract(yaml: &str) -> redliner::config::Config {
         }
         for (what, text) in strings {
             if let Err(e) = redliner::data::render_string(text, &pools, &mut rng) {
-                panic!("scenario {:?}: {what} does not render: {e}\n---\n{yaml}", s.name);
+                panic!("scenario {:?}: {what} does not render: {}\n---\n{yaml}", s.name, chain(&e));
             }
         }
     }
     cfg
+}
+
+/// `e` and each of its sources, joined with `: ` (redliner's errors name only
+/// their context; the cause is the source).
+fn chain(e: &dyn std::error::Error) -> String {
+    let mut msg = e.to_string();
+    let mut source = e.source();
+    while let Some(s) = source {
+        msg.push_str(&format!(": {s}"));
+        source = s.source();
+    }
+    msg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::assert_contract;
+
+    #[test]
+    #[should_panic(expected = "expected struct TargetConfig")]
+    fn a_draft_that_does_not_load_names_the_cause() {
+        // redliner's error names only its context; the cause is its source.
+        assert_contract("target: [");
+    }
 }

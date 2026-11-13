@@ -29,6 +29,8 @@ pub enum ImportError {
     NoBaseUrl,
     #[error("base URL {0:?} is not an http:// or https:// URL; pass --base-url")]
     BadBaseUrl(String),
+    #[error("{0} is not an http:// or https:// URL; add http:// or https://")]
+    NotHttp(String),
     #[error("{url} redirects to {location}; pass that URL instead")]
     Redirect { url: String, location: String },
     #[error("nothing to scaffold: {0}")]
@@ -41,4 +43,6 @@ pub enum ImportError {
     },
     #[error("{} exists; pass --force to overwrite", .0.display())]
     OutputExists(PathBuf),
+    #[error("{} is a directory; pass a file path to --output", .0.display())]
+    OutputIsDir(PathBuf),
 }
