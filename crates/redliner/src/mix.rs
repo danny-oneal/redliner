@@ -9,7 +9,8 @@ pub struct WeightedMix {
 }
 
 impl WeightedMix {
-    /// `scenarios` must be non-empty (config validation guarantees this).
+    /// Config validation guarantees `scenarios` is non-empty; an empty mix
+    /// picks nothing.
     pub fn new(scenarios: Vec<Scenario>) -> Self {
         let mut total = 0.0;
         let cum = scenarios
@@ -22,17 +23,14 @@ impl WeightedMix {
         Self { scenarios, cum }
     }
 
-    pub fn pick(&self, rng: &mut impl Rng) -> &Scenario {
-        let total = *self
-            .cum
-            .last()
-            .expect("WeightedMix needs at least one scenario");
+    pub fn pick(&self, rng: &mut impl Rng) -> Option<&Scenario> {
+        let total = *self.cum.last()?;
         let x = rng.random::<f64>() * total;
         let i = self
             .cum
             .partition_point(|&c| c <= x)
             .min(self.scenarios.len() - 1);
-        &self.scenarios[i]
+        self.scenarios.get(i)
     }
 }
 
@@ -56,7 +54,7 @@ mod tests {
         let mix = WeightedMix::new(vec![sc("a", 90.0), sc("b", 10.0)]);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let a = (0..10_000)
-            .filter(|_| mix.pick(&mut rng).name == "a")
+            .filter(|_| mix.pick(&mut rng).unwrap().name == "a")
             .count();
         assert!((8500..=9500).contains(&a), "a picked {a} times");
     }
@@ -66,7 +64,13 @@ mod tests {
         let mix = WeightedMix::new(vec![sc("only", 3.0)]);
         let mut rng = ChaCha8Rng::seed_from_u64(1);
         for _ in 0..100 {
-            assert_eq!(mix.pick(&mut rng).name, "only");
+            assert_eq!(mix.pick(&mut rng).unwrap().name, "only");
         }
+    }
+
+    #[test]
+    fn empty_mix_picks_nothing() {
+        let mix = WeightedMix::new(Vec::new());
+        assert!(mix.pick(&mut ChaCha8Rng::seed_from_u64(1)).is_none());
     }
 }
