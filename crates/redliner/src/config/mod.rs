@@ -484,14 +484,14 @@ impl Config {
         } else {
             match reqwest::Url::parse(&t.url) {
                 Err(e) => errs.push(format!("target.url {:?}: {e}", t.url)),
-                Ok(u) if !matches!(u.scheme(), "http" | "https") => errs.push(format!(
-                    "target.url {:?}: only http and https are supported",
-                    t.url
-                )),
                 // Don't echo the URL: it holds the credentials.
                 Ok(u) if !u.username().is_empty() || u.password().is_some() => {
                     errs.push(format!("target.url: {URL_CREDENTIALS}"))
                 }
+                Ok(u) if !matches!(u.scheme(), "http" | "https") => errs.push(format!(
+                    "target.url {:?}: only http and https are supported",
+                    t.url
+                )),
                 Ok(_) => {}
             }
         }

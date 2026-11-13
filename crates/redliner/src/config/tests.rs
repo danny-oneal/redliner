@@ -619,7 +619,7 @@ fn insecure_tls_is_off_unless_set() {
 #[test]
 fn target_url_credentials_rejected() {
     // They would land in run_manifest.json, results.jsonl and the banner.
-    for url in ["http://alice:pw@127.0.0.1:18080", "http://alice@h/graphql"] {
+    for url in ["http://alice:pw@127.0.0.1:18080", "http://alice@h/graphql", "ftp://alice:pw@h"] {
         let t = err_text(load_str(&format!("target:\n  url: {url}\n{ONE_GQL}")));
         assert!(
             t.contains(&format!("target.url: {URL_CREDENTIALS}")),
