@@ -6,10 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-13
+
 ### Changed
 - `scenarios[].weight` defaults to `1`, so a one-scenario config (the README's
   "minimal config") no longer needs it. An explicit `0` or negative weight is
   still an error.
+- Upgrading from 0.5.x, five changes can alter a run (details under Fixed):
+  - A fixed `load.seed` no longer reproduces 0.5.x runs. The `poisson`
+    profile now fires a real Poisson process (burstier, so expect higher tail
+    latency at the same `rate`), and each hit samples its values from its own
+    seeded stream, so the same seed is now reproducible run to run.
+  - Pool values spliced into a REST `path` are percent-encoded: a value
+    `a/b` is sent as `a%2Fb`, `a&b=c` as one query value.
+  - Validation is stricter, so a config that loaded before can now be
+    rejected: credentials or a non-http(s) scheme in `target.url`, a REST
+    `path` without a leading `/`, an unknown `{{placeholder}}`, an invalid
+    method or header, a missing pool file, `checks.status` outside 100-599,
+    `--rate`/`--duration` with a profile that ignores them, and replay
+    `speed`/`copies` of `0`.
+  - Firing faster than about 1000 rps keeps up to one CPU core busy, the
+    price of evenly spaced hits instead of 1 ms bursts.
+  - `results.jsonl` records gain `phase` and `timestamp_ns`, and
+    `run_manifest.json` writes durations as text (`"10s"`).
 
 ### Removed
 - Release archives for Windows, Intel macOS, ARM Linux and glibc Linux.
@@ -437,7 +456,8 @@ Initial release — a from-scratch Rust port of an internal Go/Vegeta harness.
   violates one or more SLOs.
 - **Reproducibility** — a fixed `load.seed` reproduces pacing and sampling.
 
-[Unreleased]: https://github.com/danny-oneal/redliner/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/danny-oneal/redliner/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/danny-oneal/redliner/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/danny-oneal/redliner/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/danny-oneal/redliner/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/danny-oneal/redliner/compare/v0.4.0...v0.4.1
