@@ -95,6 +95,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a value holding `/` or `?` no longer changes the route. Only the
   template text of `path` is sent as written; bodies and headers are
   unchanged.
+- A GraphQL `target.url` with a query string (`/graphql?tenant=t1`) keeps
+  it intact: the `op` tag is joined with `&`. It was appended after a second
+  `?`, so the server read `tenant` as `t1?op=<scenario>`.
 
 ## [0.5.1] - 2026-10-31
 

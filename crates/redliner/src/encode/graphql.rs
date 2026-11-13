@@ -10,6 +10,8 @@ use crate::data::{render_value, Pools};
 
 struct GraphqlRoute {
     name: String,
+    /// The endpoint plus an `op` query parameter naming the scenario.
+    url: String,
     /// The scenario name, sent as `operationName` only when the query defines
     /// an operation by that name: a spec-compliant server rejects an
     /// `operationName` the document does not define.
@@ -21,7 +23,6 @@ struct GraphqlRoute {
 }
 
 pub struct GraphqlEncoder {
-    endpoint: String,
     routes: Vec<GraphqlRoute>,
 }
 
@@ -29,21 +30,22 @@ impl GraphqlEncoder {
     pub fn new(cfg: &TargetConfig, scenarios: &[Scenario]) -> Result<Self, EncodeError> {
         let mut base = base_headers(cfg)?;
         base.insert("content-type", HeaderValue::from_static("application/json"));
+        // The op param is a correlation tag naming the scenario in server logs;
+        // joined with `&` when the endpoint already has a query string.
+        let sep = if cfg.url.contains('?') { '&' } else { '?' };
         let mut routes = Vec::with_capacity(scenarios.len());
         for sc in scenarios {
             let (headers, templated) = scenario_headers(&base, &sc.request.headers)?;
             routes.push(GraphqlRoute {
                 name: sc.name.clone(),
+                url: format!("{}{sep}op={}", cfg.url, query_escape(&sc.name)),
                 operation_name: defines_operation(&sc.request.query, &sc.name)
                     .then(|| sc.name.clone()),
                 headers,
                 templated,
             });
         }
-        Ok(Self {
-            endpoint: cfg.url.clone(),
-            routes,
-        })
+        Ok(Self { routes })
     }
 
     pub fn encode(
@@ -72,8 +74,7 @@ impl GraphqlEncoder {
         }
         let body = serde_json::to_vec(&body).map_err(|e| EncodeError::Body(e.to_string()))?;
         t.method = Method::POST;
-        // The op param is a correlation tag so per-operation metrics can be split out.
-        t.url = format!("{}?op={}", self.endpoint, query_escape(&sc.name));
+        t.url.clone_from(&route.url);
         t.body = body;
         t.header = route.headers.clone();
         // After the variables, as for REST, so adding a templated header to a
@@ -298,6 +299,19 @@ mod tests {
         let mut t = Target::default();
         e.encode(&mut t, &scenario("Get Product&x=1"), &Pools::new(), &mut rng()).unwrap();
         assert_eq!(t.url, "http://h/graphql?op=Get+Product%26x%3D1");
+    }
+
+    #[test]
+    fn op_tag_joins_an_endpoint_query_string() {
+        let sc = scenario("GetProduct");
+        let target = TargetConfig {
+            url: "http://h/graphql?tenant=t1".into(),
+            ..Default::default()
+        };
+        let e = GraphqlEncoder::new(&target, std::slice::from_ref(&sc)).unwrap();
+        let mut t = Target::default();
+        e.encode(&mut t, &sc, &Pools::new(), &mut rng()).unwrap();
+        assert_eq!(t.url, "http://h/graphql?tenant=t1&op=GetProduct");
     }
 
     #[test]
