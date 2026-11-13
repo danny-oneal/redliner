@@ -115,19 +115,33 @@ pub fn sanitize_name(s: &str) -> String {
 
 /// A JSON string literal: also a valid YAML double-quoted scalar.
 fn q(s: &str) -> String {
-    // serde_json leaves NEL, U+2028 and U+2029 raw; YAML reads them as line
-    // breaks, which inside a commented-out block would end the comment.
-    Value::String(s.to_string())
-        .to_string()
-        .replace('\u{85}', "\\u0085")
-        .replace('\u{2028}', "\\u2028")
-        .replace('\u{2029}', "\\u2029")
+    yaml_safe(&Value::String(s.to_string()).to_string())
 }
 
-/// `s` with every control character and YAML line break made a space, so text
-/// from a spec or server can't end a comment or a block-scalar line.
+/// JSON text with the characters serde_json leaves raw but YAML can't carry
+/// escaped as `\uXXXX` (they only occur inside JSON strings, where that
+/// escape means the same character). YAML reads NEL, U+2028 and U+2029 as
+/// line breaks, which inside a commented-out block would end the comment, and
+/// rejects DEL, the other C1 controls and U+FFFE/U+FFFF outright.
+fn yaml_safe(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        match c {
+            '\u{7f}'..='\u{9f}' | '\u{2028}' | '\u{2029}' | '\u{fffe}' | '\u{ffff}' => {
+                out.push_str(&format!("\\u{:04x}", c as u32))
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// `s` with every control character, YAML line break and character YAML
+/// rejects made a space, so text from a spec or server can't end a comment
+/// or a block-scalar line, or stop the draft loading.
 fn one_line(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') { ' ' } else { c }).collect()
+    let blank = |c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{fffe}' | '\u{ffff}');
+    s.chars().map(|c| if blank(c) { ' ' } else { c }).collect()
 }
 
 /// Writes the draft as a commented config `redliner` loads unmodified.
@@ -160,7 +174,7 @@ pub fn render(d: &Draft) -> String {
     if !d.pools.is_empty() {
         o.push_str("\ndata:\n  pools:\n");
         for (name, p) in &d.pools {
-            let values = Value::Array(p.values.clone());
+            let values = yaml_safe(&Value::Array(p.values.clone()).to_string());
             o.push_str(&format!("    {}: {{type: list, values: {values}}}", q(name)));
             if let Some(t) = &p.todo {
                 o.push_str(&format!("  # TODO: real values ({})", one_line(t)));
@@ -435,5 +449,40 @@ mod tests {
         assert_eq!(names, ["product"], "{yaml}");
         assert_eq!(cfg.data.pools.keys().collect::<Vec<_>>(), ["product_id"], "{yaml}");
         assert!(!cfg.scenarios[0].request.query.contains('\r'), "{yaml}");
+    }
+
+    #[test]
+    fn characters_yaml_forbids_survive_in_scalars_and_values() {
+        // libyaml rejects DEL, C1 controls and U+FFFE/U+FFFF anywhere in the
+        // stream; U+0092 is a Windows-1252 apostrophe mis-decoded.
+        let odd = "it\u{92}s \u{7f}\u{80}\u{9f}\u{fffe}\u{ffff}";
+        let mut d = Draft::new(format!("a {odd}"), "http://h", Protocol::Rest);
+        d.notes.push(odd.into());
+        d.header_names = vec![odd.into()];
+        let pool = d.add_pool("p", PoolDraft { values: vec![json!(odd), json!({ odd: [odd] })], todo: Some(odd.into()) });
+        d.scenarios.push(ScenarioDraft {
+            name: odd.into(),
+            request: RequestDraft::Rest {
+                method: "POST".into(),
+                path: format!("/a?q={{{{{pool}}}}}&r={odd}"),
+                headers: vec![(odd.into(), odd.into())],
+                body: Some(odd.into()),
+            },
+            commented: None,
+        });
+        d.scenarios.push(ScenarioDraft {
+            name: format!("{odd} 2"),
+            request: RequestDraft::Graphql { query: format!("query x {{\n  a # {odd}\n}}\n"), variables: vec![] },
+            commented: Some(odd.into()),
+        });
+
+        let yaml = render(&d);
+        let cfg = assert_contract(&yaml);
+        let r = &cfg.scenarios[0].request;
+        assert_eq!(cfg.scenarios[0].name, odd);
+        assert_eq!(r.path, format!("/a?q={{{{p}}}}&r={odd}"));
+        assert_eq!(r.headers[odd], odd);
+        assert_eq!(r.body, odd);
+        assert_eq!(cfg.data.pools["p"].values, [json!(odd), json!({ odd: [odd] })]);
     }
 }
