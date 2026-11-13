@@ -159,9 +159,10 @@ request, naming the most frequent unmatched entries.
 
 ### JSONL logs
 
-One JSON object per line; blank lines are ignored. `replay.fields` gives the
-dot path of each field in the object (same syntax as harvest `extract`:
-`a.b.c`, with `[]` to fan out an array, using the first value found).
+One JSON object per line; blank lines and a leading UTF-8 byte-order mark are
+ignored. `replay.fields` gives the dot path of each field in the object (same
+syntax as harvest `extract`: `a.b.c`, with `[]` to fan out an array, using the
+first value found).
 
 | `fields` key | default     | required | meaning |
 | ------------ | ----------- | -------- | ------- |

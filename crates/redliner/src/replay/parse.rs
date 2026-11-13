@@ -49,6 +49,13 @@ impl Trace {
     /// One JSONL line without its `\n`. Blank lines are skipped and not
     /// counted; a line that is not valid UTF-8 is malformed.
     fn push_jsonl_line(&mut self, line: usize, raw: &[u8], fields: &ReplayFields) {
+        // A UTF-8 byte-order mark (some Windows tools write one) belongs to
+        // the file, not to the first line's JSON.
+        let raw = if line == 1 {
+            raw.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(raw)
+        } else {
+            raw
+        };
         // Tolerate CRLF by dropping a single trailing '\r'.
         let raw = match raw.split_last() {
             Some((b'\r', head)) => head,
@@ -360,6 +367,16 @@ mod tests {
             "{:?}",
             t.malformed_examples
         );
+    }
+
+    #[test]
+    fn jsonl_leading_bom_is_ignored() {
+        let text = "\u{feff}{\"ts\":1,\"method\":\"GET\",\"path\":\"/a\"}\n\
+                    {\"ts\":2,\"method\":\"GET\",\"path\":\"/b\"}\n";
+        let t = parse_jsonl(text, &default_fields());
+        assert_eq!(t.malformed, 0, "{:?}", t.malformed_examples);
+        assert_eq!(t.events.len(), 2);
+        assert_eq!(t.events[0].line, 1);
     }
 
     #[test]
