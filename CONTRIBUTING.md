@@ -5,7 +5,7 @@ the conventions the codebase already follows.
 
 ## Prerequisites
 
-- A Rust toolchain **≥ 1.88** (`rustup`); the pinned channel is in
+- A Rust toolchain **≥ 1.89** (`rustup`); the pinned channel is in
   [`rust-toolchain.toml`](rust-toolchain.toml).
 - No other services are required — the test suite spins up its own in-process
   mock servers.
@@ -36,7 +36,7 @@ make run CONFIG=configs/rest-example.yaml
 make validate CONFIG=configs/rest-example.yaml
 ```
 
-CI runs `make lint`, `make test`, `cargo +1.88 check` (MSRV), `cargo package
+CI runs `make lint`, `make test`, `cargo +1.89 check` (MSRV), `cargo package
 --workspace` (every crate publishable), `make test-install` (shellcheck +
 `scripts/install.sh` against a fake release) and `make test-release` (the
 release scripts); all must pass. Keep clippy clean — warnings are errors.

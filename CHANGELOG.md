@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Configs (and `redliner-import`'s YAML specs) are parsed with
+  `serde-saphyr`, a pure-Rust YAML parser, instead of `serde_yaml_ng`, whose
+  `unsafe-libyaml` dependency is unmaintained (RUSTSEC-2024-0449). A parse
+  error now reads `<message> at line L, column C`.
+- The minimum supported Rust version is 1.89 (was 1.88), which the new YAML
+  parser requires. Only building from source is affected.
+
 ## [0.6.0] - 2026-11-13
 
 ### Changed

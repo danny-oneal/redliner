@@ -149,10 +149,10 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_via_yaml() {
-        let d: ConfigDuration = serde_yaml_ng::from_str("\"1h30m\"").unwrap();
+        let d: ConfigDuration = serde_saphyr::from_str("\"1h30m\"").unwrap();
         assert_eq!(d.as_std(), Duration::from_secs(5400));
-        let out = serde_yaml_ng::to_string(&d).unwrap();
-        let back: ConfigDuration = serde_yaml_ng::from_str(&out).unwrap();
+        let out = serde_saphyr::to_string(&d).unwrap();
+        let back: ConfigDuration = serde_saphyr::from_str(&out).unwrap();
         assert_eq!(back, d);
     }
 

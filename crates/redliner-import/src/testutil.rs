@@ -154,7 +154,7 @@ mod tests {
     use super::assert_contract;
 
     #[test]
-    #[should_panic(expected = "expected struct TargetConfig")]
+    #[should_panic(expected = "expected mapping start")]
     fn a_draft_that_does_not_load_names_the_cause() {
         // redliner's error names only its context; the cause is its source.
         assert_contract("target: [");

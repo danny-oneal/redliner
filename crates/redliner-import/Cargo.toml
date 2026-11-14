@@ -2,7 +2,7 @@
 name = "redliner-import"
 version.workspace = true
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "Scaffold a Redliner load-test config from a GraphQL schema or an OpenAPI/Swagger document"
 license = "MIT"
 repository = "https://github.com/danny-oneal/redliner"
@@ -19,7 +19,7 @@ path = "src/main.rs"
 clap = { version = "4.5.61", features = ["derive"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serde_json = "1.0.154"
-serde_yaml_ng = "0.10.0"
+serde-saphyr = "2.1.1"
 thiserror = "2.0.20"
 tokio = { version = "1.53.3", features = ["rt", "macros"] }
 
