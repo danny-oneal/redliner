@@ -2,7 +2,7 @@
 name = "redliner-volley"
 version.workspace = true
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "Async paced HTTP load-generation engine (the attack core behind Redliner)"
 license = "MIT"
 repository = "https://github.com/danny-oneal/redliner"

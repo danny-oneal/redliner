@@ -38,21 +38,21 @@ jobs:
         run: cargo package --workspace --locked
 
   msrv:
-    name: msrv (1.88)
+    name: msrv (1.89)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       # Keep in step with `rust-version` in the crate manifests.
-      - name: Install Rust 1.88
-        uses: dtolnay/rust-toolchain@1.88
+      - name: Install Rust 1.89
+        uses: dtolnay/rust-toolchain@1.89
 
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
 
-      # `+1.88` beats rust-toolchain.toml, which pins `stable`.
+      # `+1.89` beats rust-toolchain.toml, which pins `stable`.
       - name: Check on the minimum supported Rust
-        run: cargo +1.88 check --workspace --all-targets --locked
+        run: cargo +1.89 check --workspace --all-targets --locked
 
   install-script:
     name: install script

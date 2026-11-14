@@ -308,8 +308,9 @@ pub enum ConfigError {
     #[error("parse {}", path.display())]
     Parse {
         path: PathBuf,
+        // Boxed: the parser's error is large enough to bloat every Result.
         #[source]
-        source: serde_yaml_ng::Error,
+        source: Box<serde_saphyr::Error>,
     },
     /// All validation problems, aggregated.
     #[error("{}: invalid config:\n  - {}", path.display(), errors.join("\n  - "))]
@@ -340,9 +341,12 @@ pub fn load_config_file_with(
         path: path.to_path_buf(),
         source,
     })?;
-    let cfg: Config = serde_yaml_ng::from_str(&raw).map_err(|source| ConfigError::Parse {
+    // One line with the position: the default snippet repeats the message
+    // and labels the file `<input>`.
+    let options = serde_saphyr::options! { with_snippet: false };
+    let cfg: Config = serde_saphyr::from_str_with_options(&raw, options).map_err(|source| ConfigError::Parse {
         path: path.to_path_buf(),
-        source,
+        source: Box::new(source),
     })?;
     load_config_with(path, cfg, overrides)
 }

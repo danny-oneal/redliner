@@ -24,7 +24,7 @@ updates:
       actions:
         patterns: ["*"]
     ignore:
-      # This action's tags are Rust versions (@1.88 installs Rust 1.88), which
+      # This action's tags are Rust versions (@1.89 installs Rust 1.89), which
       # ci.yml's msrv job pins on purpose. Dependabot reads them as releases of
       # the action and "upgrades" the minimum-version check to a newer Rust.
       - dependency-name: "dtolnay/rust-toolchain"

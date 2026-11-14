@@ -19,7 +19,19 @@ pub fn load_doc(text: &str) -> Result<Value, ImportError> {
     if let Ok(v) = serde_json::from_str(text) {
         return Ok(v);
     }
-    serde_yaml_ng::from_str(text)
+    // Big specs pass the parser's default 250k-node budget. The other limits
+    // stay: 64 levels of nesting (deeper overflows the stack instead of
+    // failing) and the alias limits that stop an alias bomb. One line, no
+    // snippet: the default snippet repeats the message and labels the spec
+    // `<input>`.
+    let options = serde_saphyr::options! {
+        with_snippet: false,
+        budget: serde_saphyr::budget! {
+            max_nodes: 10_000_000,
+            max_events: 40_000_000,
+        },
+    };
+    serde_saphyr::from_str_with_options(text, options)
         .map_err(|e| ImportError::Decode { what: "spec".into(), message: e.to_string() })
 }
 
@@ -363,6 +375,28 @@ mod tests {
         let spec = format!("\u{feff}{PETSTORE3_YAML}");
         assert_eq!(load_doc(&spec).unwrap(), load_doc(PETSTORE3_YAML).unwrap());
         assert_eq!(load_doc("\u{feff}{\"a\":1}").unwrap(), json!({"a": 1}));
+    }
+
+    #[test]
+    fn large_yaml_specs_load_and_hostile_ones_fail_cleanly() {
+        // Big real-world specs run to hundreds of thousands of nodes, past the
+        // YAML parser's default budget of 250k.
+        let mut big = String::from("openapi: 3.0.0\nx-big:\n");
+        for i in 0..260_000 {
+            big.push_str(&format!("  - {i}\n"));
+        }
+        assert_eq!(load_doc(&big).unwrap()["x-big"].as_array().map(Vec::len), Some(260_000));
+        // Nesting past 64 levels is an error, not a stack overflow.
+        let deep = format!("a: {}1{}\n", "[".repeat(100), "]".repeat(100));
+        assert!(load_doc(&deep).is_err());
+        // An alias bomb (each level ten aliases of the last, 10^12 nodes) is
+        // still refused.
+        let mut bomb = String::from("l0: &l0 [x, x, x, x, x, x, x, x, x, x]\n");
+        for i in 1..12 {
+            let refs = vec![format!("*l{}", i - 1); 10].join(", ");
+            bomb.push_str(&format!("l{i}: &l{i} [{refs}]\n"));
+        }
+        assert!(load_doc(&bomb).is_err());
     }
 
     #[test]

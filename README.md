@@ -70,7 +70,7 @@ distro and in `scratch`/distroless images. Releases ship Linux x86_64 and
 Apple Silicon macOS binaries only; anywhere else (ARM Linux, Intel macOS,
 Windows), build from source.
 
-**From source** needs a **Rust toolchain ≥ 1.88** ([rustup](https://rustup.rs)).
+**From source** needs a **Rust toolchain ≥ 1.89** ([rustup](https://rustup.rs)).
 
 ```bash
 # From a local checkout (also: `make install`, which installs both):
